@@ -90,6 +90,20 @@ function mdFiles(home) {
   return files.sort();
 }
 
+// Files whose entries `amr context` injects: MEMORY.md plus projects/*.md.
+function injectableFiles(home) {
+  const pdir = path.join(home, 'projects');
+  return [
+    'MEMORY.md',
+    ...(fs.existsSync(pdir)
+      ? fs
+          .readdirSync(pdir, { withFileTypes: true })
+          .filter((e) => e.isFile() && e.name.endsWith('.md'))
+          .map((e) => `projects/${e.name}`)
+      : []),
+  ];
+}
+
 function collect(home) {
   const entries = [];
   const indexLinks = new Set();
@@ -164,17 +178,7 @@ export function analyze(home, { staleDays = 90, budget = 0 } = {}) {
   // the context char budget its live entries would consume.
   const fills = [];
   if (budget > 0) {
-    const pdir = path.join(home, 'projects');
-    const injectable = [
-      'MEMORY.md',
-      ...(fs.existsSync(pdir)
-        ? fs
-            .readdirSync(pdir, { withFileTypes: true })
-            .filter((e) => e.isFile() && e.name.endsWith('.md'))
-            .map((e) => `projects/${e.name}`)
-        : []),
-    ];
-    for (const rel of injectable) {
+    for (const rel of injectableFiles(home)) {
       const chars = liveEntryLines(home, rel).reduce((n, l) => n + l.length, 0);
       if (chars) fills.push({ file: rel, chars, pct: chars / budget });
     }
@@ -224,49 +228,25 @@ function touchDream(home) {
   );
 }
 
-export function cmdDream(flags) {
-  if (flags.spin) {
-    if (!process.stderr.isTTY)
-      return out('run `amr dream --spin` in a real terminal to see the moons');
-    spinStart(true);
-    setTimeout(() => {
-      spinStop();
-      out('💤 dreamt.');
-    }, 2600);
-    return;
-  }
-  // Judge-backed backlog triage is opt-in and separate from --fix, which
-  // the session-end hook runs unattended.
-  if (flags.triage) return cmdTriage(flags);
-  const home = ensureRepo();
-  const staleDays = numFlag(flags.days ?? '90', 90);
-  const cfg = loadConfig(home);
-  const budget = numFlag(flags.budget, cfg.contextBudget ?? 0);
+function spinDemo() {
+  if (!process.stderr.isTTY)
+    return out('run `amr dream --spin` in a real terminal to see the moons');
+  spinStart(true);
+  setTimeout(() => {
+    spinStop();
+    out('💤 dreamt.');
+  }, 2600);
+}
 
-  // --if-stale N: run only when the last dream is older than N days
-  if (flags['if-stale'] !== undefined) {
-    const minAge = numFlag(flags['if-stale'] || '7', 7);
-    const ageDays = (Date.now() - lastDreamAt(home)) / 864e5;
-    if (ageDays < minAge) return; // recently dreamt; stay quiet (hook-safe)
-  }
+// --if-stale N: true when the last dream is recent enough to skip this run.
+function recentlyDreamt(home, flags) {
+  if (flags['if-stale'] === undefined) return false;
+  const minAge = numFlag(flags['if-stale'] || '7', 7);
+  const ageDays = (Date.now() - lastDreamAt(home)) / 864e5;
+  return ageDays < minAge;
+}
 
-  // --inline: printed moon frames instead of a live spinner — survives
-  // hook/tool-output capture and shows up inline in agent transcripts.
-  const ttySpin = process.stderr.isTTY && !flags.json && !flags.inline;
-  spinStart(ttySpin);
-  const moon = (suffix) => {
-    if (flags.inline && !flags.json)
-      err(`${FRAMES[spinI++ % FRAMES.length]} ${suffix}`);
-  };
-  try {
-  const report = analyze(home, { staleDays, budget });
-  moon('dreaming…');
-
-  if (flags.json) {
-    out(JSON.stringify(report, null, 2));
-    return;
-  }
-
+function printReport(report, home, staleDays) {
   const s = report.stats;
   out(`dream report — ${home}`);
   out(`  ${s.entries} entries in ${s.files} file(s); MEMORY.md ${s.memoryMdBytes}B/${s.memoryMdLines} lines`);
@@ -290,25 +270,24 @@ export function cmdDream(flags) {
   report.unindexedFiles.forEach((f) => out(`    - ${f}`));
   if (report.entriesWithoutDate)
     out(`  entries missing 'added:' date: ${report.entriesWithoutDate}`);
+}
 
-  if (!flags.fix && !flags.compact) {
-    touchDream(home);
-    out('');
-    out('run `amr dream --fix` for mechanical cleanup (index, dead links, exact dups); add --compact to archive entries beyond the digest cap. Semantic merging needs an agent — see dreams/DREAMER.md');
-    return;
-  }
+// An expired entry that earned a recent `amr used` proved it is still
+// load-bearing: return the line with a renewed TTL, or null to drop it.
+function renewedLine(line, usage, nowMs, cfg) {
+  const u = usage[entryId(line)];
+  if (!u || nowMs - u.last >= 90 * 864e5) return null;
+  return line.replace(
+    /expires:\s*\d{4}-\d{2}-\d{2}/,
+    `expires: ${addDays(numFlag(cfg.defaultTtlDays, DEFAULT_TTL_DAYS))}`
+  );
+}
 
-  moon('still dreaming…');
-  const changed = [];
-  const touched = new Set();
-  // Hold the repo lock for the whole fix+compact pass so a concurrent
-  // `amr add` can't interleave or lose an update mid-dream.
-  const finish = () => {
-
-  // drop exact-duplicate bullets, keeping the first occurrence
+// drop exact-duplicate bullets (keeping the first occurrence) and expired
+// state, renewing expired entries that were recently marked used
+function dedupeAndExpire(home, cfg, changed, touched) {
   const usage = loadUsage(home);
   const nowMs = Date.now();
-  const tidies = []; // [scope, texts] consolidated after the lock releases
   const seen = new Set();
   for (const rel of mdFiles(home)) {
     const abs = path.join(home, rel);
@@ -320,20 +299,13 @@ export function cmdDream(flags) {
     for (const l of lines) {
       if (l.trim().startsWith('- ') && !l.includes('[[')) {
         if (isExpired(l)) {
-          // An expired entry that earned a recent `amr used` proved it is
-          // still load-bearing: renew its TTL instead of dropping it.
-          const u = usage[entryId(l)];
-          if (u && nowMs - u.last < 90 * 864e5) {
+          const fresh = renewedLine(l, usage, nowMs, cfg);
+          if (fresh) {
             renewed++;
-            keep.push(
-              l.replace(
-                /expires:\s*\d{4}-\d{2}-\d{2}/,
-                `expires: ${addDays(numFlag(cfg.defaultTtlDays, DEFAULT_TTL_DAYS))}`
-              )
-            );
-            continue;
+            keep.push(fresh);
+          } else {
+            expiredRemoved++;
           }
-          expiredRemoved++;
           continue;
         }
         const n = bulletText(l);
@@ -345,21 +317,24 @@ export function cmdDream(flags) {
       }
       keep.push(l);
     }
-    if (removed || expiredRemoved || renewed) {
-      atomicWrite(abs, keep.join('\n').replace(/\n{3,}/g, '\n\n'));
-      touched.add(rel);
-      if (removed) changed.push(`${rel}: removed ${removed} duplicate(s)`);
-      if (expiredRemoved)
-        changed.push(`${rel}: dropped ${expiredRemoved} expired entr${expiredRemoved === 1 ? 'y' : 'ies'}`);
-      if (renewed)
-        changed.push(`${rel}: renewed ${renewed} expired entr${renewed === 1 ? 'y' : 'ies'} (marked used recently)`);
-    }
+    if (!(removed || expiredRemoved || renewed)) continue;
+    atomicWrite(abs, keep.join('\n').replace(/\n{3,}/g, '\n\n'));
+    touched.add(rel);
+    if (removed) changed.push(`${rel}: removed ${removed} duplicate(s)`);
+    if (expiredRemoved)
+      changed.push(`${rel}: dropped ${expiredRemoved} expired entr${expiredRemoved === 1 ? 'y' : 'ies'}`);
+    if (renewed)
+      changed.push(`${rel}: renewed ${renewed} expired entr${renewed === 1 ? 'y' : 'ies'} (marked used recently)`);
   }
+}
 
-  // Budget pressure: queue merge/delete proposals for files past the
-  // consolidation threshold so the next session can act on them.
-  // Files under the threshold still get the duplicate scan: waiting for
-  // the budget wall is how three copies of one pitfall coexisted.
+// Budget pressure: collect merge/delete proposals for files past the
+// consolidation threshold so the next session can act on them.
+// Files under the threshold still get the duplicate scan: waiting for
+// the budget wall is how three copies of one pitfall coexisted.
+// Returns [scope, texts] pairs, queued after the lock releases.
+function collectProposals(home, cfg, report, changed) {
+  const tidies = [];
   const consolidateAt = cfg.consolidateAt ?? CONSOLIDATE_AT;
   for (const f of report.fills) {
     const props =
@@ -386,14 +361,18 @@ export function cmdDream(flags) {
     tidies.push([scope, props]);
     changed.push(`${rel}: queued ${props.length} consolidation proposal(s)`);
   }
+  return tidies;
+}
 
+function assignIds(home, changed, touched) {
   const ids = backfillIds(home);
-  if (ids.n) {
-    ids.touched.forEach((f) => touched.add(f));
-    changed.push(`assigned ids to ${ids.n} entr${ids.n === 1 ? 'y' : 'ies'}`);
-  }
+  if (!ids.n) return;
+  ids.touched.forEach((f) => touched.add(f));
+  changed.push(`assigned ids to ${ids.n} entr${ids.n === 1 ? 'y' : 'ies'}`);
+}
 
-  // prune dead index links + index unindexed files
+// prune dead index links + index unindexed files
+function syncIndex(home, report, changed, touched) {
   const memPath = path.join(home, 'MEMORY.md');
   let memLines = fs.readFileSync(memPath, 'utf8').split(/\r?\n/);
   const pruned = memLines.filter((l) => {
@@ -424,61 +403,53 @@ export function cmdDream(flags) {
   }
   if (touched.has('MEMORY.md'))
     atomicWrite(memPath, memLines.join('\n').replace(/\n{3,}/g, '\n\n'));
+}
 
-  // --compact: archive oldest entries beyond the digest cap so live
-  // files never exceed what `amr context` injects. Archive files stay
-  // searchable via `amr search`; they are not session-injected.
-  if (flags.compact) {
-    const keep = numFlag(flags.keep || '25', 25);
-    const pdir = path.join(home, 'projects');
-    const targets = [
-      'MEMORY.md',
-      ...(fs.existsSync(pdir)
-        ? fs
-            .readdirSync(pdir, { withFileTypes: true })
-            .filter((e) => e.isFile() && e.name.endsWith('.md'))
-            .map((e) => `projects/${e.name}`)
-        : []),
-    ];
-    for (const rel of targets) {
-      const abs = path.join(home, rel);
-      if (!fs.existsSync(abs)) continue;
-      const lines = fs.readFileSync(abs, 'utf8').split(/\r?\n/);
-      const idxAt =
-        rel === 'MEMORY.md'
-          ? lines.findIndex((l) => /^##\s+Index/.test(l))
-          : -1;
-      const headEnd = idxAt >= 0 ? idxAt : lines.length;
-      const bulletIdx = [];
-      for (let i = 0; i < headEnd; i++)
-        if (lines[i].trim().startsWith('- ') && !lines[i].includes('[['))
-          bulletIdx.push(i);
-      if (bulletIdx.length <= keep) continue;
-      const move = new Set(bulletIdx.slice(0, bulletIdx.length - keep));
-      const archived = [...move]
-        .sort((a, b) => a - b)
-        .map((i) => lines[i]);
-      const arel =
-        rel === 'MEMORY.md' ? 'archive/MEMORY.md' : `archive/${rel}`;
-      const aabs = path.join(home, arel);
-      if (!fs.existsSync(aabs)) {
-        fs.mkdirSync(path.dirname(aabs), { recursive: true });
-        fs.writeFileSync(aabs, `# Archive: ${rel}\n\n`);
-      }
-      fs.appendFileSync(aabs, archived.join('\n') + '\n');
-      atomicWrite(
-        abs,
-        lines
-          .filter((_, i) => !move.has(i))
-          .join('\n')
-          .replace(/\n{3,}/g, '\n\n')
-      );
-      touched.add(rel);
-      touched.add(arel);
-      changed.push(`${rel}: archived ${archived.length} oldest entrie(s)`);
-    }
+// Archive the oldest bullets of one injectable file beyond the `keep` cap.
+function compactFile(home, rel, keep, changed, touched) {
+  const abs = path.join(home, rel);
+  if (!fs.existsSync(abs)) return;
+  const lines = fs.readFileSync(abs, 'utf8').split(/\r?\n/);
+  const idxAt =
+    rel === 'MEMORY.md' ? lines.findIndex((l) => /^##\s+Index/.test(l)) : -1;
+  const headEnd = idxAt >= 0 ? idxAt : lines.length;
+  const bulletIdx = [];
+  for (let i = 0; i < headEnd; i++)
+    if (lines[i].trim().startsWith('- ') && !lines[i].includes('[['))
+      bulletIdx.push(i);
+  if (bulletIdx.length <= keep) return;
+  const move = new Set(bulletIdx.slice(0, bulletIdx.length - keep));
+  const archived = [...move].sort((a, b) => a - b).map((i) => lines[i]);
+  const arel = rel === 'MEMORY.md' ? 'archive/MEMORY.md' : `archive/${rel}`;
+  const aabs = path.join(home, arel);
+  if (!fs.existsSync(aabs)) {
+    fs.mkdirSync(path.dirname(aabs), { recursive: true });
+    fs.writeFileSync(aabs, `# Archive: ${rel}\n\n`);
   }
+  fs.appendFileSync(aabs, archived.join('\n') + '\n');
+  atomicWrite(
+    abs,
+    lines
+      .filter((_, i) => !move.has(i))
+      .join('\n')
+      .replace(/\n{3,}/g, '\n\n')
+  );
+  touched.add(rel);
+  touched.add(arel);
+  changed.push(`${rel}: archived ${archived.length} oldest entrie(s)`);
+}
 
+// --compact: archive oldest entries beyond the digest cap so live
+// files never exceed what `amr context` injects. Archive files stay
+// searchable via `amr search`; they are not session-injected.
+function compactAll(home, flags, changed, touched) {
+  const keep = numFlag(flags.keep || '25', 25);
+  for (const rel of injectableFiles(home))
+    compactFile(home, rel, keep, changed, touched);
+}
+
+// Commit what moved and report it. Returns the queued proposals.
+function commitFixes(home, changed, touched, tidies) {
   if (!changed.length) {
     touchDream(home);
     out('nothing mechanical to fix');
@@ -492,10 +463,64 @@ export function cmdDream(flags) {
   changed.forEach((c) => out(`  ${c}`));
   if (!ok) err('commit failed; fixes left uncommitted in working tree');
   return tidies;
+}
+
+// The fix+compact pass; runs under the repo lock (see cmdDream) so a
+// concurrent `amr add` can't interleave or lose an update mid-dream.
+function applyFixes(home, cfg, report, flags) {
+  const changed = [];
+  const touched = new Set();
+  dedupeAndExpire(home, cfg, changed, touched);
+  const tidies = collectProposals(home, cfg, report, changed);
+  assignIds(home, changed, touched);
+  syncIndex(home, report, changed, touched);
+  if (flags.compact) compactAll(home, flags, changed, touched);
+  return commitFixes(home, changed, touched, tidies);
+}
+
+export function cmdDream(flags) {
+  if (flags.spin) return spinDemo();
+  // Judge-backed backlog triage is opt-in and separate from --fix, which
+  // the session-end hook runs unattended.
+  if (flags.triage) return cmdTriage(flags);
+  const home = ensureRepo();
+  const staleDays = numFlag(flags.days ?? '90', 90);
+  const cfg = loadConfig(home);
+  const budget = numFlag(flags.budget, cfg.contextBudget ?? 0);
+
+  // recently dreamt; stay quiet (hook-safe)
+  if (recentlyDreamt(home, flags)) return;
+
+  // --inline: printed moon frames instead of a live spinner — survives
+  // hook/tool-output capture and shows up inline in agent transcripts.
+  const ttySpin = process.stderr.isTTY && !flags.json && !flags.inline;
+  spinStart(ttySpin);
+  const moon = (suffix) => {
+    if (flags.inline && !flags.json)
+      err(`${FRAMES[spinI++ % FRAMES.length]} ${suffix}`);
   };
-  const tidies = withLock(home, finish) || [];
-  for (const [scope, texts] of tidies) queueConsolidations(home, scope, texts);
-  if (flags.inline && !flags.json) err('💤 dreamt.');
+  try {
+    const report = analyze(home, { staleDays, budget });
+    moon('dreaming…');
+
+    if (flags.json) {
+      out(JSON.stringify(report, null, 2));
+      return;
+    }
+
+    printReport(report, home, staleDays);
+
+    if (!flags.fix && !flags.compact) {
+      touchDream(home);
+      out('');
+      out('run `amr dream --fix` for mechanical cleanup (index, dead links, exact dups); add --compact to archive entries beyond the digest cap. Semantic merging needs an agent — see dreams/DREAMER.md');
+      return;
+    }
+
+    moon('still dreaming…');
+    const tidies = withLock(home, () => applyFixes(home, cfg, report, flags)) || [];
+    for (const [scope, texts] of tidies) queueConsolidations(home, scope, texts);
+    if (flags.inline && !flags.json) err('💤 dreamt.');
   } finally {
     spinDone();
   }

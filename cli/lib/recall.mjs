@@ -128,21 +128,23 @@ const SKIP_TEXT_KEYS = new Set(['command', 'cmd', 'input', 'tool_input', 'args',
 
 // Does a tool response itself report a failure? Looks (a few levels deep)
 // for is_error, interrupted, success:false or a non-zero exit code.
+const FLAG_KEYS = new Set(['is_error', 'iserror', 'interrupted']);
+
+// Does this one key/value pair say "failed"?
+function fieldReportsFailure(key, val) {
+  if (FLAG_KEYS.has(key)) return val === true;
+  if (key === 'success') return val === false;
+  if (!EXIT_KEYS.includes(key)) return false;
+  const n = typeof val === 'string' ? Number(val) : val;
+  return typeof n === 'number' && Number.isFinite(n) && n !== 0;
+}
+
 function responseFailed(v, depth = 0) {
   if (!v || typeof v !== 'object' || depth > 3) return false;
   if (Array.isArray(v)) return v.some((x) => responseFailed(x, depth + 1));
-  for (const [k, val] of Object.entries(v)) {
-    const key = k.toLowerCase();
-    if ((key === 'is_error' || key === 'iserror' || key === 'interrupted') && val === true)
-      return true;
-    if (key === 'success' && val === false) return true;
-    if (EXIT_KEYS.includes(key)) {
-      const n = typeof val === 'string' ? Number(val) : val;
-      if (typeof n === 'number' && Number.isFinite(n) && n !== 0) return true;
-    }
-    if (val && typeof val === 'object' && responseFailed(val, depth + 1)) return true;
-  }
-  return false;
+  return Object.entries(v).some(
+    ([k, val]) => fieldReportsFailure(k.toLowerCase(), val) || responseFailed(val, depth + 1)
+  );
 }
 
 // Strings of a tool response, minus keys that echo the invocation.
@@ -321,131 +323,159 @@ const RARE_MIN_LEN = 5;
 const MIN_SHARED = 2; // without a trigger: at least two shared words, one rare
 const DEDUPE_OVERLAP = 0.6;
 
+// Score one entry against an error. Returns a candidate, or null when the
+// entry fails the gate or is muted. `ctx` carries the per-call state:
+// errorText, errTokens, triggerTerms, df (word -> entry count), N, muted.
+function scoreCandidate(e, ctx) {
+  const { errorText, errTokens, triggerTerms, df, N, muted } = ctx;
+  let score = 0;
+  let rare = 0;
+  const sharedWords = [];
+  for (const w of e.toks) {
+    if (!errTokens.has(w)) continue;
+    sharedWords.push(w);
+    const d = df.get(w) || 1;
+    score += Math.log2(1 + N / d);
+    if (d <= RARE_DF && w.length >= RARE_MIN_LEN) rare++;
+  }
+  const text = e.line.toLowerCase();
+  const triggerHit = triggerTerms.some((term) => text.includes(term));
+  if (triggerHit) score += 4;
+  if (entryKind(e.line) === 'pitfall') score += 0.5;
+  // Gate, not just score: a curated trigger, or two shared words one of
+  // which is rare, so overlap on ambient words never fires the hook.
+  if (!(triggerHit || (rare >= 1 && sharedWords.length >= MIN_SHARED))) return null;
+  const id = entryId(e.line);
+  const trigIdx = triggerIndexes(errorText, e.line);
+  if (isMuted(muted, id, errTokens, trigIdx)) return null;
+  return { line: e.line, toks: e.toks, score, id, sig: { tokens: sharedWords, trig: trigIdx } };
+}
+
+// Collapse near-duplicates: several entries saying the same thing add
+// noise, not signal, so the best one stands for them.
+function isDuplicateOf(c, p) {
+  return (
+    similarity(c.line, p.line) >= 0.5 ||
+    (Math.min(c.toks.size, p.toks.size) >= 8 && overlap(c.line, p.line) >= DEDUPE_OVERLAP)
+  );
+}
+
+function collapseDuplicates(scored, limit) {
+  const picked = [];
+  for (const c of scored) {
+    if (picked.length >= limit) break;
+    if (!picked.some((p) => isDuplicateOf(c, p))) picked.push(c);
+  }
+  return picked;
+}
+
 export function findRecall(home, errorText, opts = {}) {
   const { limit = 2, cwd = null } = opts;
   if (!errorText || !ERROR_LINE.test(errorText)) return [];
-  const errTokens = tokens(errorText);
-  const triggers = TRIGGERS.filter((t) => t.re.test(errorText));
-  const triggerTerms = triggers.flatMap((t) => t.terms);
   const scope = projectKeys(home, cwd);
-  const muted = loadJson(home, MUTED_FILE);
-
   const entries = allLiveEntries(home).map((e) => ({ ...e, toks: tokens(e.line) }));
   // How many live entries contain each word: rare words identify a topic,
   // common ones ("install", "session") are ambient.
   const df = new Map();
   for (const e of entries) for (const w of e.toks) df.set(w, (df.get(w) || 0) + 1);
-  const N = entries.length;
-
-  const scored = [];
-  for (const e of entries) {
-    const entryKeys = entryScope(e.line, e.rel);
-    if (entryKeys.size && ![...entryKeys].some((k) => scope.has(k))) continue;
-    const id = entryId(e.line);
-    const text = e.line.toLowerCase();
-    let score = 0;
-    let shared = 0;
-    let rare = 0;
-    const sharedWords = [];
-    for (const w of e.toks)
-      if (errTokens.has(w)) {
-        shared++;
-        sharedWords.push(w);
-        const d = df.get(w) || 1;
-        score += Math.log2(1 + N / d);
-        if (d <= RARE_DF && w.length >= RARE_MIN_LEN) rare++;
-      }
-    const trigIdx = triggerIndexes(errorText, e.line);
-    const triggerHit = triggerTerms.some((term) => text.includes(term));
-    if (triggerHit) score += 4;
-    if (entryKind(e.line) === 'pitfall') score += 0.5;
-    // Gate, not just score: a curated trigger, or two shared words one of
-    // which is rare, so overlap on ambient words never fires the hook.
-    if (!(triggerHit || (rare >= 1 && shared >= MIN_SHARED))) continue;
-    if (isMuted(muted, id, errTokens, trigIdx)) continue;
-    scored.push({ line: e.line, toks: e.toks, score, id, sig: { tokens: sharedWords, trig: trigIdx } });
-  }
-  scored.sort((a, b) => b.score - a.score);
-
-  // Collapse near-duplicates: several entries saying the same thing add
-  // noise, not signal, so the best one stands for them.
-  const picked = [];
-  for (const c of scored) {
-    if (picked.length >= limit) break;
-    const dup = picked.some(
-      (p) =>
-        similarity(c.line, p.line) >= 0.5 ||
-        (Math.min(c.toks.size, p.toks.size) >= 8 && overlap(c.line, p.line) >= DEDUPE_OVERLAP)
-    );
-    if (!dup) picked.push(c);
-  }
-  return picked;
+  const ctx = {
+    errorText,
+    errTokens: tokens(errorText),
+    triggerTerms: TRIGGERS.filter((t) => t.re.test(errorText)).flatMap((t) => t.terms),
+    df,
+    N: entries.length,
+    muted: loadJson(home, MUTED_FILE),
+  };
+  const scored = entries
+    .filter((e) => {
+      const keys = entryScope(e.line, e.rel);
+      return !keys.size || [...keys].some((k) => scope.has(k));
+    })
+    .map((e) => scoreCandidate(e, ctx))
+    .filter(Boolean)
+    .sort((a, b) => b.score - a.score);
+  return collapseDuplicates(scored, limit);
 }
 
 // ---- command ------------------------------------------------------------
 
-export function cmdRecall(text, flags) {
-  const home = ensureRepo();
-  let errorText = '';
-  let payload = null;
-  let raw = text || '';
-  if (flags.hook || !raw) {
-    let stdin = '';
-    try {
-      stdin = fs.readFileSync(0, 'utf8');
-    } catch {}
-    if (stdin.trim()) {
-      try {
-        payload = JSON.parse(stdin);
-      } catch {
-        // A hook host always sends JSON: an unreadable payload is not an
-        // error report, so stay silent. Only the manual form (`... | amr
-        // recall` with no --hook) takes stdin as pasted error text.
-        if (flags.hook) return;
-        raw = stdin;
-      }
-    }
+// Where the failure text comes from: {payload, raw}, or null to stay
+// silent. A hook host always sends JSON, so an unreadable payload is not an
+// error report. Only the manual form (`... | amr recall` with no --hook)
+// takes stdin as pasted error text.
+function readInput(text, flags) {
+  const input = { payload: null, raw: text || '' };
+  if (!flags.hook && input.raw) return input;
+  let stdin = '';
+  try {
+    stdin = fs.readFileSync(0, 'utf8');
+  } catch {}
+  if (!stdin.trim()) return input;
+  try {
+    input.payload = JSON.parse(stdin);
+  } catch {
+    if (flags.hook) return null;
+    input.raw = stdin;
   }
+  return input;
+}
+
+// The excerpt to score, or '' when nothing failed.
+function errorTextFor({ payload, raw }) {
   if (payload && typeof payload === 'object') {
     // A hook payload: act only on a real failure.
     const failure = failureFromPayload(payload);
-    if (failure === null) return;
-    errorText = failureExcerpt(failure, { fallbackTail: true });
-  } else {
-    // Text handed to the command is an explicit "here is an error".
-    errorText = failureExcerpt(raw);
+    return failure === null ? '' : failureExcerpt(failure, { fallbackTail: true });
   }
-  if (!errorText) return;
-  const cwd = payload?.cwd || process.cwd();
-  const found = findRecall(home, errorText, { cwd });
-  if (!found.length) return;
-  const sid =
-    payload?.session_id || payload?.sessionId || payload?.conversation_id;
-  // No session id means no way to tell sessions apart: treat every call as
-  // fresh rather than share one dedupe bucket across unrelated sessions.
-  const freshLines = new Set(
-    sid ? filterFresh(home, `s:${sid}`, found.map((h) => h.line)) : found.map((h) => h.line)
-  );
-  const hits = found.filter((h) => freshLines.has(h.line));
-  if (!hits.length) return;
-  const usage = loadUsage(home);
-  const show = (h) => renderEntry(h.line, usage[h.id]?.last ?? null);
-  // Remember what each shown entry matched on, so `amr unhelpful <id>`
-  // can mute it for that kind of error only.
+  // Text handed to the command is an explicit "here is an error".
+  return failureExcerpt(raw);
+}
+
+// Hits not already shown this session. With no session id there is no way
+// to tell sessions apart, so every call is fresh rather than sharing one
+// dedupe bucket across unrelated sessions.
+function freshHits(home, payload, found) {
+  const sid = payload?.session_id || payload?.sessionId || payload?.conversation_id;
+  if (!sid) return found;
+  const fresh = new Set(filterFresh(home, `s:${sid}`, found.map((h) => h.line)));
+  return found.filter((h) => fresh.has(h.line));
+}
+
+// Remember what each shown entry matched on, so `amr unhelpful <id>` can
+// mute it for that kind of error only.
+function rememberHits(home, hits) {
   const last = loadJson(home, LAST_FILE);
   for (const h of hits) if (h.id) last[h.id] = h.sig;
   writeJsonAtomic(path.join(home, '.git', LAST_FILE), last);
-  if (flags.hook) {
-    const ev = String(payload?.hook_event_name || '');
-    out(
-      JSON.stringify({
-        hookSpecificOutput: {
-          hookEventName: /^PostToolUse(Failure)?$/.test(ev) ? ev : 'PostToolUse',
-          additionalContext: `Possibly relevant memory (matched on this tool failure by keyword, so it may not apply; run \`amr unhelpful <id>\` if it is noise):\n${hits.map(show).join('\n')}`,
-        },
-      })
-    );
+}
+
+const HOOK_HEADER =
+  'Possibly relevant memory (matched on this tool failure by keyword, so it may not apply; run `amr unhelpful <id>` if it is noise):';
+
+export function cmdRecall(text, flags) {
+  const home = ensureRepo();
+  const input = readInput(text, flags);
+  if (!input) return;
+  const errorText = errorTextFor(input);
+  if (!errorText) return;
+  const { payload } = input;
+  const found = findRecall(home, errorText, { cwd: payload?.cwd || process.cwd() });
+  const hits = freshHits(home, payload, found);
+  if (!hits.length) return;
+  const usage = loadUsage(home);
+  const show = (h) => renderEntry(h.line, usage[h.id]?.last ?? null);
+  rememberHits(home, hits);
+  if (!flags.hook) {
+    for (const h of hits) out(h.id ? `${show(h)} [recall id: ${h.id}]` : show(h));
     return;
   }
-  for (const h of hits) out(h.id ? `${show(h)} [recall id: ${h.id}]` : show(h));
+  const ev = String(payload?.hook_event_name || '');
+  out(
+    JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: /^PostToolUse(Failure)?$/.test(ev) ? ev : 'PostToolUse',
+        additionalContext: `${HOOK_HEADER}\n${hits.map(show).join('\n')}`,
+      },
+    })
+  );
 }

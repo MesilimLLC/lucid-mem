@@ -13,11 +13,13 @@ import {
   entryKind,
   isExpired,
   loadConfig,
+  normName,
   numFlag,
+  trailingMeta,
 } from './core.mjs';
 import { entryId } from './ids.mjs';
 import { DEFAULT_BUDGET, loadUsage, scoreEntry } from './rank.mjs';
-import { overlap, similarity } from './pending.mjs';
+import { similarity, words } from './pending.mjs';
 
 export const CONSOLIDATE_AT = 0.8;
 const MAX_PROPOSALS = 5;
@@ -31,19 +33,34 @@ export const MERGE_SIMILARITY = 0.4;
 export const MERGE_OVERLAP = 0.6;
 export const MERGE_MIN_WORDS = 8;
 const JACCARD_MIN_WORDS = 6; // matches nearDuplicate's short-entry exemption
-const wordCount = (s) =>
-  new Set(
-    String(s)
-      .toLowerCase()
-      .replace(/\[[^\]]*\]\s*$/, '')
-      .split(/[^a-z0-9]+/)
-      .filter((w) => w.length >= 3)
-  ).size;
-export function nearlySame(a, b) {
-  const small = Math.min(wordCount(a), wordCount(b));
+// Set-based so callers comparing many pairs tokenize each entry once.
+export function nearlySameSets(x, y) {
+  const small = Math.min(x.size, y.size);
   if (small < JACCARD_MIN_WORDS) return false;
-  if (similarity(a, b) >= MERGE_SIMILARITY) return true;
-  return small >= MERGE_MIN_WORDS && overlap(a, b) >= MERGE_OVERLAP;
+  let inter = 0;
+  for (const w of x) if (y.has(w)) inter++;
+  if (inter / (x.size + y.size - inter) >= MERGE_SIMILARITY) return true;
+  return small >= MERGE_MIN_WORDS && inter / small >= MERGE_OVERLAP;
+}
+export const nearlySame = (a, b) => nearlySameSets(words(a), words(b));
+
+// What an entry is scoped to. Files under projects/ answer to their full
+// slug (name-hash, so same-named repos with different remotes stay apart);
+// the `project:` meta only scopes entries living elsewhere, where a repo
+// name is all there is. Empty set = global.
+export function entryScope(line, rel) {
+  const f = String(rel).match(/^projects\/(.+)\.md$/);
+  if (f) return new Set([f[1]]);
+  const m = trailingMeta(line).match(/project:\s*([^;\]]+)/);
+  return new Set(m ? [normName(m[1])] : []);
+}
+
+// Does an entry with scope `entryKeys` apply wherever `destKeys` applies?
+// A global entry covers everything; a scoped one only its own scope, and
+// never a global destination.
+export function coversScope(entryKeys, destKeys) {
+  if (!entryKeys.size) return true;
+  return [...entryKeys].some((k) => destKeys.has(k));
 }
 
 // Live entry lines of a memory file; MEMORY.md's Index section is links,
@@ -90,8 +107,9 @@ export function allLiveEntries(home, { includeExpired = false } = {}) {
 // The live entry `text` most nearly restates, or null.
 export function similarEntry(text, entries) {
   let best = null;
+  const mine = words(text);
   for (const e of entries) {
-    if (!nearlySame(text, e.line)) continue;
+    if (!nearlySameSets(mine, words(e.line))) continue;
     const score = similarity(text, e.line);
     if (!best || score > best.score) best = { ...e, score };
   }
@@ -125,12 +143,13 @@ export function mergeProposals(home, rel, now = Date.now(), max = MAX_PROPOSALS)
     i,
     id: entryId(l),
     s: scoreEntry(l, usage, undefined, now),
+    w: words(text(l)),
   }));
   for (let i = 0; i < scored.length && proposals.length < max; i++) {
     for (let j = i + 1; j < scored.length; j++) {
       const [a, b] = [scored[i], scored[j]];
       if (paired.has(a.i) || paired.has(b.i) || !a.id || !b.id) continue;
-      if (!nearlySame(text(a.l), text(b.l))) continue;
+      if (!nearlySameSets(a.w, b.w)) continue;
       const [keep, drop] = a.s >= b.s ? [a, b] : [b, a];
       proposals.push(
         `merge ${drop.id} into ${keep.id} (near-duplicate): fold any unique detail into ${keep.id}, then \`amr delete ${drop.id}\``

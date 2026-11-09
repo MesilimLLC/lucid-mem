@@ -42,7 +42,15 @@ import {
 import { DEFAULT_BUDGET, bumpUsage, loadUsage, pickWithinBudget } from './rank.mjs';
 import { ID_RE, entryId, findById, newId, scanIds } from './ids.mjs';
 import { drainReflections, nearDuplicate, archivedReflectionCount, pendingReflectionLines, queueConsolidations } from './pending.mjs';
-import { CONSOLIDATE_AT, allLiveEntries, budgetFill, consolidationProposals, similarEntry } from './consolidate.mjs';
+import {
+  CONSOLIDATE_AT,
+  allLiveEntries,
+  budgetFill,
+  consolidationProposals,
+  coversScope,
+  entryScope,
+  similarEntry,
+} from './consolidate.mjs';
 
 const out = (s = '') => process.stdout.write(s + '\n');
 const err = (s) => process.stderr.write(s + '\n');
@@ -655,7 +663,9 @@ export function cmdAdd(text, flags) {
   let similar = null;
   const result = withLock(home, () => {
     if (entryExists(t.abs, text)) return 'duplicate';
-    if (fs.existsSync(t.abs)) {
+    // --new is the explicit "genuinely distinct" override for both
+    // similarity checks, so it also skips the same-file one.
+    if (!flags.new && fs.existsSync(t.abs)) {
       const near = nearDuplicate(
         text,
         fs
@@ -673,7 +683,15 @@ export function cmdAdd(text, flags) {
     // case (three cp1252 entries). Session state churns by design, and
     // --new is the explicit "yes, this is distinct" escape hatch.
     if (flags.kind !== 'state' && !flags.new) {
-      similar = similarEntry(text, allLiveEntries(home));
+      // Only entries that would cover the destination count: a lesson
+      // saved in project alpha is invisible from project beta (recall and
+      // the digest are project-scoped), so it is no reason to refuse a
+      // copy scoped to beta.
+      const dest = entryScope('', t.rel);
+      similar = similarEntry(
+        text,
+        allLiveEntries(home).filter((e) => coversScope(entryScope(e.line, e.rel), dest))
+      );
       if (similar) return 'similar';
     }
     if (created) {

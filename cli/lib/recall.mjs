@@ -24,10 +24,9 @@ import {
   projectFor,
   renderEntry,
   resolveProjectSlug,
-  trailingMeta,
 } from './core.mjs';
 import { entryId } from './ids.mjs';
-import { allLiveEntries } from './consolidate.mjs';
+import { allLiveEntries, entryScope } from './consolidate.mjs';
 import { loadUsage } from './rank.mjs';
 import { overlap, similarity } from './pending.mjs';
 
@@ -180,8 +179,12 @@ export function failureFromPayload(payload) {
 }
 
 // Lines that read like a failure report.
-const ERROR_LINE =
-  /\b(error|failed|failure|fatal|exception|traceback|panic|denied|refused|cannot|could not|unable to|not found|no such|unexpected|invalid|missing|timed out|syntaxerror|unicodedecodeerror)\b|\b[a-z]{2,3}\d{4}\b|\bexit code [1-9]|\bE[A-Z]{4,}\b/i;
+const ERROR_WORDS =
+  /\b(error|failed|failure|fatal|exception|traceback|panic|denied|refused|cannot|could not|unable to|not found|no such|unexpected|invalid|missing|timed out|syntaxerror|unicodedecodeerror)\b|\b[a-z]{2,3}\d{4}\b|\bexit code [1-9]/i;
+// errno names (ENOENT, EACCES, EUSAGE) are upper-case by convention; with the
+// i flag this would match every word of 5+ letters starting with "e".
+const ERRNO = /\bE[A-Z]{4,}\b/;
+const ERROR_LINE = { test: (s) => ERROR_WORDS.test(s) || ERRNO.test(s) };
 
 export const EXCERPT_CAP = 2048;
 const LINE_CAP = 400;
@@ -209,42 +212,26 @@ export function failureExcerpt(text, { fallbackTail = false, cap = EXCERPT_CAP }
 
 // ---- project gating -----------------------------------------------------
 
-const slugName = (slug) => slug.replace(/-[0-9a-f]{6}$/, '');
-
-// Names an entry is scoped to: its `project:` meta and, for files under
-// projects/, the file's slug. Empty set = a global entry.
-function entryScope(line, rel) {
-  const keys = new Set();
-  const m = trailingMeta(line).match(/project:\s*([^;\]]+)/);
-  if (m) keys.add(normName(m[1]));
-  const f = rel.match(/^projects\/(.+)\.md$/);
-  if (f) {
-    keys.add(f[1]);
-    keys.add(slugName(f[1]));
-  }
-  return keys;
-}
-
-// Names the current working directory answers to: its repo name and slug
-// (stable across worktrees), the checkout dir for pre-slug files, and the
-// projects it is linked to.
+// Names the current working directory answers to: its full slug (stable
+// across worktrees and clones, distinct for same-named repos with different
+// remotes), its repo name (for entries scoped only by `project:` meta), a
+// pre-slug file named after the checkout dir, and its linked projects.
 function projectKeys(home, cwd) {
   const keys = new Set();
   if (!cwd || !fs.existsSync(cwd)) return keys;
   const proj = projectFor(cwd);
   if (!proj) return keys;
-  keys.add(normName(proj.name));
   keys.add(proj.slug);
-  keys.add(slugName(proj.slug));
-  keys.add(normName(path.basename(proj.toplevel)));
-  const links = projectEntry(loadConfig(home), proj)?.links || [];
-  for (const l of links) {
-    const slug = resolveProjectSlug(home, l);
-    if (slug) {
-      keys.add(slug);
-      keys.add(slugName(slug));
-    } else keys.add(normName(l));
+  keys.add(normName(proj.name));
+  // Project files predating worktree-stable slugs were named after the
+  // checkout dir but hashed the same basis, so they share this repo's hash
+  // suffix. Requiring it keeps a same-named repo with another remote out.
+  if (!fs.existsSync(path.join(home, 'projects', `${proj.slug}.md`))) {
+    const legacy = resolveProjectSlug(home, path.basename(proj.toplevel));
+    if (legacy && legacy.slice(-6) === proj.slug.slice(-6)) keys.add(legacy);
   }
+  const links = projectEntry(loadConfig(home), proj)?.links || [];
+  for (const l of links) keys.add(resolveProjectSlug(home, l) || normName(l));
   return keys;
 }
 

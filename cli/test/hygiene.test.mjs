@@ -173,3 +173,46 @@ test('a file full of duplicate pairs still gets its expired entries flagged', as
   const props = consolidationProposals(home, 'MEMORY.md', 6000);
   assert.ok(props.some((p) => /expired entry dead/.test(p)), props.join('\n'));
 });
+
+test('--new also overrides the same-file near-duplicate check', () => {
+  const home = seeded();
+  const base = 'When regenerating the lockfile on Windows, use the CI npm version, because the local npm drops nested entries';
+  assert.match(run(['add', base], { amrHome: home }).stdout, /saved/);
+  const variant = base.replace('Windows', 'Linux');
+  assert.match(run(['add', variant], { amrHome: home }).stdout, /near-duplicate|similar/);
+  assert.match(run(['add', variant, '--new'], { amrHome: home }).stdout, /saved/);
+});
+
+test('a similar entry in another project does not block a copy scoped to this one', () => {
+  const home = seeded();
+  const a = initRepo(path.join(tmpdir(), 'alpha'), 'https://github.com/acme/alpha.git');
+  const b = initRepo(path.join(tmpdir(), 'beta'), 'https://github.com/acme/beta.git');
+  const text = 'When writing files through a bash heredoc on Windows, build backslash escapes with chr(92), because heredoc escapes corrupt string literals';
+  assert.match(run(['add', text, '--project'], { amrHome: home, cwd: a }).stdout, /saved/);
+  // beta cannot see alpha's entry, so saving its own copy is right
+  assert.match(run(['add', text + ' today', '--project'], { amrHome: home, cwd: b }).stdout, /saved/);
+  // a global copy is not covered by alpha's project-scoped entry either
+  assert.match(run(['add', text + ' globally'], { amrHome: home }).stdout, /saved/);
+  // but inside alpha it is a near-copy of what alpha already has
+  assert.match(run(['add', text + ' again', '--project'], { amrHome: home, cwd: a }).stdout, /similar|near-duplicate/);
+});
+
+test('dream scopes duplicate proposals from a project file to that project', () => {
+  const home = seeded();
+  const repo = initRepo(path.join(tmpdir(), 'gamma'), 'https://github.com/acme/gamma.git');
+  assert.equal(run(['add', 'seed note for gamma project', '--project'], { amrHome: home, cwd: repo }).status, 0);
+  const pf = path.join(home, 'projects', fs.readdirSync(path.join(home, 'projects'))[0]);
+  fs.writeFileSync(
+    pf,
+    [
+      '# Project: gamma',
+      '',
+      `- ${CP_ONE} [added: 2026-10-24; kind: pitfall; id: 088f]`,
+      `- ${CP_TWO} [added: 2026-10-24; kind: pitfall; id: 7266]`,
+      '',
+    ].join('\n')
+  );
+  assert.equal(run(['dream', '--fix'], { amrHome: home }).status, 0);
+  const queue = read(path.join(home, 'dreams', 'pending-reflections.md')) || '';
+  assert.match(queue, /tidy scope=gamma-[0-9a-f]{6}: merge/);
+});

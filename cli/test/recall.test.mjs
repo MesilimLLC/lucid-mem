@@ -151,7 +151,7 @@ test('a shared common word is not enough: a rare shared word is required', () =>
     'When the package install hook rewrites lockfiles, review the diff before committing anything',
     'When the package install output is noisy, silence it with the quiet flag in CI scripts',
   ];
-  for (const t of common) assert.equal(run(['add', t], { amrHome: home }).status, 0);
+  for (const t of common) assert.equal(run(['add', t, '--new'], { amrHome: home }).status, 0);
   // shares only "package"/"install" (in all three entries, so not rare)
   const ambient = run(['recall', 'error: package install exited unexpectedly'], { amrHome: home });
   assert.equal(ambient.stdout.trim(), '');
@@ -168,7 +168,7 @@ test('near-duplicate hits collapse to one', () => {
   const two =
     'When editing Python source files on Windows, use UTF-8 explicitly or the Edit tool, because Python defaults to cp1252 which corrupts em dashes, ellipses, and backslash escapes.';
   const three = 'When Windows tools emit cp1252 text, decode it with iconv before grepping for non-ASCII characters.';
-  for (const t of [one, two, three]) assert.equal(run(['add', t, '--kind', 'pitfall'], { amrHome: home }).status, 0);
+  for (const t of [one, two, three]) assert.equal(run(['add', t, '--kind', 'pitfall', '--new'], { amrHome: home }).status, 0);
   const r = run(['recall', "UnicodeDecodeError: 'charmap' codec can't decode byte 0x9d (cp1252)"], { amrHome: home });
   const shown = r.stdout.trim().split('\n').filter(Boolean);
   assert.ok(shown.length <= 2, `expected at most 2 hits, got ${shown.length}`);
@@ -263,4 +263,22 @@ test('amr unhelpful accepts an entry that just expired, and a wildcard mute is n
   assert.match(second.stdout, /already muted for all errors: ab12/);
   const muted = JSON.parse(fs.readFileSync(path.join(home, '.git', 'amr-unhelpful.json'), 'utf8'));
   assert.deepEqual(muted.ab12, [null]);
+});
+
+test('same-named repos with different remotes do not share recall entries', () => {
+  const home = tmpdir();
+  run(['ensure'], { amrHome: home });
+  const one = initRepo(path.join(tmpdir(), 'shared'), 'https://github.com/acme/shared.git');
+  const two = initRepo(path.join(tmpdir(), 'shared'), 'https://github.com/other/shared.git');
+  assert.equal(run(['add', PITFALL, '--kind', 'pitfall', '--project'], { amrHome: home, cwd: one }).status, 0);
+  const payload = (sid, cwd) => ({ session_id: sid, cwd, tool_name: 'Bash', tool_response: { stderr: CS, exit_code: 1 } });
+  assert.ok(fires(hook(home, payload('sn-1', one))));
+  assert.equal(hook(home, payload('sn-2', two)).stdout.trim(), '');
+});
+
+test('the errno pattern is case-sensitive: ordinary words starting with "e" are not error lines', async () => {
+  const { failureExcerpt } = await import('../lib/recall.mjs');
+  assert.equal(failureExcerpt('every entry exited with example output\nentries are fine'), '');
+  assert.match(failureExcerpt('spawn failed: ENOENT'), /ENOENT/);
+  assert.match(failureExcerpt('npm error code EUSAGE'), /EUSAGE/);
 });

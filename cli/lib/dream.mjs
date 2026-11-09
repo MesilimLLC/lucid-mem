@@ -380,7 +380,10 @@ export function cmdDream(flags) {
     if (scanned.has(rel)) continue;
     const props = mergeProposals(home, rel).proposals;
     if (!props.length) continue;
-    tidies.push([null, props]);
+    // Project files scope their proposals to that project, like the
+    // budget loop above; MEMORY.md and topic files are global.
+    const scope = rel.startsWith('projects/') ? rel.replace(/^projects\/|\.md$/g, '') : null;
+    tidies.push([scope, props]);
     changed.push(`${rel}: queued ${props.length} consolidation proposal(s)`);
   }
 

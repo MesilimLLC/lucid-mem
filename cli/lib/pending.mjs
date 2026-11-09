@@ -31,7 +31,7 @@ const ARCHIVE_HEADER = [
   '',
 ];
 
-const words = (s) =>
+export const words = (s) =>
   new Set(
     String(s)
       .toLowerCase()

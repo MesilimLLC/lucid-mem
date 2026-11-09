@@ -68,7 +68,7 @@ export function liveEntryLines(home, rel) {
 
 // Every live entry across the repo (archive/ and dreams/ excluded), with
 // the file it lives in.
-export function allLiveEntries(home) {
+export function allLiveEntries(home, { includeExpired = false } = {}) {
   const files = [];
   (function walk(dir) {
     for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -83,7 +83,7 @@ export function allLiveEntries(home) {
   const out = [];
   for (const rel of files)
     for (const line of liveEntryLines(home, rel))
-      if (!isExpired(line)) out.push({ line, rel });
+      if (includeExpired || !isExpired(line)) out.push({ line, rel });
   return out;
 }
 
@@ -145,7 +145,9 @@ export function mergeProposals(home, rel, now = Date.now(), max = MAX_PROPOSALS)
 
 // Concrete proposals for one file that is at/over the threshold.
 export function consolidationProposals(home, rel, budget, now = Date.now()) {
-  const { proposals, paired, scored } = mergeProposals(home, rel, now);
+  // Leave one slot for the expired/session-state pass below: a file full of
+  // duplicate pairs must still get its expired entries flagged.
+  const { proposals, paired, scored } = mergeProposals(home, rel, now, MAX_PROPOSALS - 1);
 
   // Entries that should not occupy budget at all.
   for (const { l, i, id } of scored) {

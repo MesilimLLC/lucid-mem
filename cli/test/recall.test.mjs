@@ -233,3 +233,34 @@ test('--hook with an unparseable payload stays silent instead of treating it as 
   const manual = run(['recall'], { amrHome: home, input: 'error CS1010: Newline in constant' });
   assert.match(manual.stdout, /chr\(92\)/);
 });
+
+test('hook payloads without a session id are not deduped against each other', () => {
+  const home = tmpdir();
+  seed(home);
+  const payload = { tool_name: 'Bash', tool_response: { stderr: CS, exit_code: 1 } };
+  assert.ok(fires(hook(home, payload)));
+  assert.ok(fires(hook(home, payload)));
+});
+
+test('a failure with no extractable text stays silent', () => {
+  const home = tmpdir();
+  seed(home);
+  const r = hook(home, { session_id: 'empty1', tool_name: 'Bash', tool_response: { is_error: true } });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stdout.trim(), '');
+});
+
+test('amr unhelpful accepts an entry that just expired, and a wildcard mute is not stacked', () => {
+  const home = tmpdir();
+  run(['ensure'], { amrHome: home });
+  fs.writeFileSync(
+    path.join(home, 'MEMORY.md'),
+    `# Memory\n\n- ${PITFALL} [added: 2026-01-01; expires: 2026-01-02; kind: pitfall; id: ab12]\n\n## Index\n`
+  );
+  const first = run(['unhelpful', 'ab12'], { amrHome: home });
+  assert.match(first.stdout, /muted.*ab12.*all errors/);
+  const second = run(['unhelpful', 'ab12', 'error CS1010: Newline in constant'], { amrHome: home });
+  assert.match(second.stdout, /already muted for all errors: ab12/);
+  const muted = JSON.parse(fs.readFileSync(path.join(home, '.git', 'amr-unhelpful.json'), 'utf8'));
+  assert.deepEqual(muted.ab12, [null]);
+});

@@ -174,7 +174,9 @@ export function failureFromPayload(payload) {
   const parts = [];
   if (typeof payload.error === 'string') parts.push(payload.error);
   responseText(resp, 0, parts);
-  return parts.join('\n');
+  // A failure with no extractable text has nothing to match on: null, so
+  // callers keep one "nothing to score" check.
+  return parts.join('\n') || null;
 }
 
 // Lines that read like a failure report.
@@ -280,10 +282,19 @@ export function cmdUnhelpful(ids, errorText = '') {
   const last = loadJson(home, LAST_FILE);
   const muted = loadJson(home, MUTED_FILE);
   const done = [];
-  const entries = allLiveEntries(home);
+  const already = [];
+  // Expired entries still count: an entry can expire between the recall
+  // that showed it and the user muting it.
+  const entries = allLiveEntries(home, { includeExpired: true });
   for (const id of ids) {
     const entry = entries.find((e) => entryId(e.line) === id);
     if (!entry) continue;
+    // A null sig mutes the entry for every error, so a later selective
+    // mute adds nothing; say so instead of silently stacking.
+    if ((muted[id] || []).includes(null)) {
+      already.push(id);
+      continue;
+    }
     let sig = last[id] || null;
     if (errorText.trim()) {
       const err = tokens(failureExcerpt(errorText) || errorText);
@@ -291,15 +302,20 @@ export function cmdUnhelpful(ids, errorText = '') {
       const trig = triggerIndexes(errorText, entry.line);
       sig = { tokens: shared, trig };
     }
-    (muted[id] ||= []).push(sig);
+    // A wildcard replaces any narrower mutes it now covers.
+    if (sig === null) muted[id] = [null];
+    else (muted[id] ||= []).push(sig);
     done.push(id);
   }
   if (done.length) writeJsonAtomic(path.join(home, '.git', MUTED_FILE), muted);
-  out(
-    done.length
-      ? `muted for similar errors: ${done.join(', ')}${errorText.trim() || ids.some((i) => last[i]) ? '' : ' (no recent recall to learn from: muted for all errors)'}`
-      : 'no matching ids'
-  );
+  const lines = [];
+  if (done.length)
+    lines.push(
+      `muted for similar errors: ${done.join(', ')}${done.some((i) => muted[i]?.includes(null)) ? ' (no recent recall to learn from: muted for all errors)' : ''}`
+    );
+  if (already.length)
+    lines.push(`already muted for all errors: ${already.join(', ')} (delete its entry in .git/amr-unhelpful.json to unmute)`);
+  out(lines.length ? lines.join('\n') : 'no matching ids');
 }
 
 // ---- matching -----------------------------------------------------------
@@ -418,8 +434,10 @@ export function cmdRecall(text, flags) {
   if (!found.length) return;
   const sid =
     payload?.session_id || payload?.sessionId || payload?.conversation_id;
+  // No session id means no way to tell sessions apart: treat every call as
+  // fresh rather than share one dedupe bucket across unrelated sessions.
   const freshLines = new Set(
-    filterFresh(home, sid ? `s:${sid}` : 'anon', found.map((h) => h.line))
+    sid ? filterFresh(home, `s:${sid}`, found.map((h) => h.line)) : found.map((h) => h.line)
   );
   const hits = found.filter((h) => freshLines.has(h.line));
   if (!hits.length) return;

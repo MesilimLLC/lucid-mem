@@ -152,3 +152,24 @@ test('"N omitted" pointer appears only for the current repo, not linked projects
   assert.match(mine, /lower-ranked entries omitted/);
   assert.doesNotMatch(linked || '', /entries omitted/);
 });
+
+test('a file full of duplicate pairs still gets its expired entries flagged', async () => {
+  const { consolidationProposals } = await import('../lib/consolidate.mjs');
+  const home = seeded();
+  const words = [
+    ['alpha', 'bravo', 'charlie', 'delta', 'echo', 'foxtrot', 'golf', 'hotel'],
+    ['india', 'juliet', 'kilo', 'lima', 'mike', 'november', 'oscar', 'papa'],
+    ['quebec', 'romeo', 'sierra', 'tango', 'uniform', 'victor', 'whiskey', 'xray'],
+    ['yankee', 'zulu', 'amber', 'basalt', 'cobalt', 'dune', 'ember', 'fjord'],
+    ['garnet', 'harbor', 'indigo', 'jasper', 'kestrel', 'lagoon', 'meadow', 'nectar'],
+  ];
+  const rows = [];
+  words.forEach((w, i) => {
+    rows.push(`- ${w.join(' ')} shared topic ${i} one extra [added: 2026-11-01; kind: fact; id: a${i}0a]`);
+    rows.push(`- ${w.join(' ')} shared topic ${i} two extra [added: 2026-11-01; kind: fact; id: a${i}0b]`);
+  });
+  rows.push('- stale thing nobody needs [added: 2026-01-01; expires: 2026-01-02; kind: fact; id: dead]');
+  fs.writeFileSync(path.join(home, 'MEMORY.md'), `# Memory\n\n${rows.join('\n')}\n\n## Index\n`);
+  const props = consolidationProposals(home, 'MEMORY.md', 6000);
+  assert.ok(props.some((p) => /expired entry dead/.test(p)), props.join('\n'));
+});

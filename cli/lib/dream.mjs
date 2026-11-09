@@ -16,8 +16,10 @@ import { cmdTriage } from './triage.mjs';
 import { loadUsage } from './rank.mjs';
 import {
   CONSOLIDATE_AT,
+  allLiveEntries,
   consolidationProposals,
   liveEntryLines,
+  mergeProposals,
 } from './consolidate.mjs';
 import { queueConsolidations } from './pending.mjs';
 
@@ -356,15 +358,30 @@ export function cmdDream(flags) {
 
   // Budget pressure: queue merge/delete proposals for files past the
   // consolidation threshold so the next session can act on them.
+  // Files under the threshold still get the duplicate scan: waiting for
+  // the budget wall is how three copies of one pitfall coexisted.
   const consolidateAt = cfg.consolidateAt ?? CONSOLIDATE_AT;
   for (const f of report.fills) {
-    if (f.pct < consolidateAt) continue;
-    const props = consolidationProposals(home, f.file, report.budget);
+    const props =
+      f.pct >= consolidateAt
+        ? consolidationProposals(home, f.file, report.budget)
+        : mergeProposals(home, f.file).proposals;
     if (!props.length) continue;
     const scope =
       f.file === 'MEMORY.md' ? null : f.file.replace(/^projects\/|\.md$/g, '');
     tidies.push([scope, props]);
     changed.push(`${f.file}: queued ${props.length} consolidation proposal(s)`);
+  }
+  // Topic files (pitfalls.md, fact-bank.md, ...) are not in the digest, so
+  // they have no budget fill and were never scanned at all: that is where
+  // the duplicate pitfalls piled up. Same duplicate pass for them.
+  const scanned = new Set(report.fills.map((f) => f.file));
+  for (const rel of new Set(allLiveEntries(home).map((e) => e.rel))) {
+    if (scanned.has(rel)) continue;
+    const props = mergeProposals(home, rel).proposals;
+    if (!props.length) continue;
+    tidies.push([null, props]);
+    changed.push(`${rel}: queued ${props.length} consolidation proposal(s)`);
   }
 
   const ids = backfillIds(home);

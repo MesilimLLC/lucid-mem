@@ -26,7 +26,7 @@ import { cmdHarvest } from './harvest.mjs';
 import { cmdCoverage } from './coverage.mjs';
 import { cmdDoctor, cmdInstall, cmdUninstall } from './install.mjs';
 import { cmdServe } from './serve.mjs';
-import { cmdRecall } from './recall.mjs';
+import { cmdRecall, cmdUnhelpful } from './recall.mjs';
 
 const USAGE = `amr: agent memory CLI (lucid-mem)
 
@@ -34,7 +34,8 @@ usage: amr <command> [args] [flags]
 
   ensure                        create/verify the memory repo ($AMR_HOME, default ~/agent-memory)
   context [dir] [--budget N]    ranked session digest (default 6000 chars; --full ignores): project-scoped inside a known repo; global + pooled projects outside; --hook (Claude SessionStart) suppresses unchanged compaction re-injections; --hermes (Hermes shell hooks) injects once per session via pre_llm_call, re-arms on post_compaction
-  recall ["<error text>"]       surface the memory entry matching a tool error (PostToolUse hook reads the payload on stdin with --hook); silent when nothing matches
+  recall ["<error text>"]       surface memory possibly relevant to a tool failure (PostToolUseFailure hook reads the payload on stdin with --hook); acts only on real failures, only this project's entries, silent when nothing matches
+  unhelpful <id...> ["<error>"] mute a recalled entry for that kind of error (learns from the last recall, or from the error text given)
   add "text"                    save a memory entry
   update <id|"match"> "text"   replace an entry in place; ids look like a3f9 (shown in entry meta)
   supersede <id> ["text"]       retire an entry to archive/superseded.md, optionally with a replacement
@@ -67,6 +68,8 @@ flags:
   --kind <k>                    add kind metadata (pitfall|decision|preference|fact|howto|state)
   --ttl <days>                  expire an entry after N days (default 30, 2 for state; 0 = durable)
   --durable                     opt the entry out of expiry (also drops it on update)
+  --verify "<cmd>"              a command that re-checks the fact; shown with the entry (never run). Hosting/deploy facts expire in 14 days by default
+  --new                         save even though a similar entry exists (add otherwise offers supersede/update)
   --cwd <dir>                   resolve project/host context against this dir
   --allow-secret                bypass secret-shape refusal
 `;
@@ -77,7 +80,7 @@ flags:
 const BOOL_FLAGS = new Set([
   'project', 'full', 'json', 'fix', 'compact', 'inline', 'spin', 'hook', 'hermes',
   'extract', 'no-log', 'allow-secret', 'if-stale-off', 'triage', 'apply',
-  'durable', 'history',
+  'durable', 'history', 'new',
 ]);
 
 function parseFlags(argv) {
@@ -160,6 +163,15 @@ export function main(argv) {
       }
       case 'recall':
         return cmdRecall(pos.join(' '), flags);
+      case 'unhelpful': {
+        const ids = pos.filter((p) => /^[0-9a-f]{4,8}$/.test(p));
+        if (!ids.length) {
+          process.stderr.write('usage: amr unhelpful <id...> ["error text"]\n');
+          process.exitCode = 1;
+          return;
+        }
+        return cmdUnhelpful(ids, pos.filter((p) => !ids.includes(p)).join(' '));
+      }
       case 'search': {
         const term = pos.join(' ');
         if (!term.trim()) {

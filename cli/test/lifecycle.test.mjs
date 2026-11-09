@@ -139,10 +139,13 @@ test('add past 80% of budget queues consolidation proposals; delete drains them'
 test('queue overflow archives evicted proposals instead of dropping them', () => {
   const home = seeded();
   const queue = path.join(home, 'dreams', 'pending-reflections.md');
-  const old = '- [reflect] 2026-10-20 add pitfall global: oldest queued lesson about zephyr sondes';
+  // Dates are relative: the queue ages items out after 14 days, so fixed
+  // dates silently turn this test into a different one.
+  const daysAgo = (n) => new Date(Date.now() - n * 864e5).toISOString().slice(0, 10);
+  const old = `- [reflect] ${daysAgo(8)} add pitfall global: oldest queued lesson about zephyr sondes`;
   const fresh = Array.from(
     { length: 14 },
-    (_, i) => `- [reflect] 2026-10-26 add fact global: filler proposal number ${i} about mistral`
+    (_, i) => `- [reflect] ${daysAgo(2)} add fact global: filler proposal number ${i} about mistral`
   );
   fs.mkdirSync(path.dirname(queue), { recursive: true });
   fs.writeFileSync(queue, ['# Pending reflections', '', ...[old, ...fresh]].join('\n') + '\n');

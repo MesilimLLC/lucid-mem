@@ -19,6 +19,10 @@ import {
   normName,
   projectEntry,
   entryTokens,
+  entryKind,
+  encodeVerify,
+  renderEntry,
+  ttlDays,
   KINDS,
   numFlag,
   STATE_TTL_DAYS,
@@ -38,7 +42,7 @@ import {
 import { DEFAULT_BUDGET, bumpUsage, loadUsage, pickWithinBudget } from './rank.mjs';
 import { ID_RE, entryId, findById, newId, scanIds } from './ids.mjs';
 import { drainReflections, nearDuplicate, archivedReflectionCount, pendingReflectionLines, queueConsolidations } from './pending.mjs';
-import { CONSOLIDATE_AT, budgetFill, consolidationProposals } from './consolidate.mjs';
+import { CONSOLIDATE_AT, allLiveEntries, budgetFill, consolidationProposals, similarEntry } from './consolidate.mjs';
 
 const out = (s = '') => process.stdout.write(s + '\n');
 const err = (s) => process.stderr.write(s + '\n');
@@ -351,20 +355,26 @@ export function cmdContext(flags) {
     s.split(/\r?\n/).filter((l) => l.trim().startsWith('- ') && !isExpired(l));
   const full = !!flags.full;
   const cfg = loadConfig(home);
+  // The "N omitted, run amr search" pointer is only worth its line when
+  // the omitted entries are about the repo the session is in. For global,
+  // pooled, linked and index lists it is noise, so those lists just trim.
+  const omittedNote = (count, what) =>
+    `- … ${count} ${what} omitted — run \`amr search "term"\` or \`amr context --full\``;
   // Tail cap (newest N) for lists that aren't ranked: index links, peers.
-  const capTail = (arr, n) =>
+  const capTail = (arr, n, announce = false) =>
     full || arr.length <= n
       ? arr
       : [
-          `- … ${arr.length - n} older entries omitted — run \`amr search "term"\` or \`amr context --full\``,
+          ...(announce ? [omittedNote(arr.length - n, 'older entries')] : []),
           ...arr.slice(-n),
         ];
   // Ranked cap: best entries by kind/recency/usage within a shared char
-  // budget across sections (see rank.mjs).
+  // budget across sections (see rank.mjs). `announce` marks the section
+  // holding the current repo's own entries.
   let remaining = numFlag(flags.budget, cfg.contextBudget ?? DEFAULT_BUDGET);
   const usage = loadUsage(home);
   let signal = null;
-  const cap = (arr, n) => {
+  const cap = (arr, n, announce = false) => {
     if (full) return arr;
     const picked = pickWithinBudget(arr, n, remaining, usage, (l) => episodicHits(l).length > 0, signal);
     remaining -= picked.chars;
@@ -372,10 +382,14 @@ export function cmdContext(flags) {
     return picked.items.length === arr.length
       ? arr
       : [
-          `- … ${arr.length - picked.items.length} lower-ranked entries omitted — run \`amr search "term"\` or \`amr context --full\``,
+          ...(announce ? [omittedNote(arr.length - picked.items.length, 'lower-ranked entries')] : []),
           ...picked.items,
         ];
   };
+  // Digest display: dated meta (legacy bare dates labelled, a confirmed:
+  // date when `amr used` is newer) and any --verify command in the body.
+  const show = (lines) =>
+    lines.map((l) => renderEntry(l, usage[entryId(l)]?.last ?? null));
   const entry = proj ? projectEntry(cfg, proj) : null;
   // Two modes: inside a repo that has a memory file, the digest is
   // project-scoped — this project plus its linked siblings only, no
@@ -436,7 +450,7 @@ export function cmdContext(flags) {
     if (!fs.existsSync(pf)) continue;
     projectSections.push({
       a,
-      body: cap(bullets(fs.readFileSync(pf, 'utf8')), 25).join('\n'),
+      body: show(cap(bullets(fs.readFileSync(pf, 'utf8')), 25, !a.linked)).join('\n'),
     });
   }
   // Outside-mode digest: the latest 25 project entries pooled across
@@ -459,9 +473,9 @@ export function cmdContext(flags) {
       }
     }
     pool.sort((a, b) => b.d.localeCompare(a.d));
-    recentLines = cap(pool.map((x) => x.b), 25);
+    recentLines = show(cap(pool.map((x) => x.b), 25));
   }
-  const globalLines = inProject ? [] : cap(bullets(idxSplit[0] || ''), 25);
+  const globalLines = inProject ? [] : show(cap(bullets(idxSplit[0] || ''), 25));
   const indexLinks = capTail(bullets(idxSplit[1] || ''), 12);
 
   const lines = [`<agent-memory repo="${home}">`];
@@ -524,7 +538,7 @@ export function cmdContext(flags) {
     if (proj) {
       const pf = path.join(dir, 'projects', `${proj.slug}.md`);
       if (fs.existsSync(pf)) {
-        const pb = capTail(bullets(fs.readFileSync(pf, 'utf8')), 8);
+        const pb = capTail(bullets(fs.readFileSync(pf, 'utf8')), 8, true);
         if (pb.length)
           lines.push(`### ${p.name} memory for this project`, pb.join('\n'));
       }
@@ -604,9 +618,15 @@ function buildEntry(text, flags, proj, id, cfg = {}) {
   if (flags.kind === 'state')
     meta.push(`expires: ${addDays(numFlag(flags.ttl, STATE_TTL_DAYS))}`);
   else if (!flags.durable) {
-    const ttl = numFlag(flags.ttl ?? cfg.defaultTtlDays, DEFAULT_TTL_DAYS);
+    // Hosting/deploy facts expire sooner than other kinds (see ttlDays).
+    const ttl =
+      flags.ttl !== undefined
+        ? numFlag(flags.ttl, DEFAULT_TTL_DAYS)
+        : ttlDays(text, cfg, flags.kind);
     if (ttl > 0) meta.push(`expires: ${addDays(ttl)}`);
   }
+  if (typeof flags.verify === 'string' && flags.verify.trim())
+    meta.push(`verify: ${encodeVerify(flags.verify.trim())}`);
   if (proj) meta.push(`project: ${proj.name}`);
   if (id) meta.push(`id: ${id}`);
   return `- ${text.replace(/\s+/g, ' ').trim()} [${meta.join('; ')}]`;
@@ -632,6 +652,7 @@ export function cmdAdd(text, flags) {
 
   let newEntryId = null;
   let nearLine = null;
+  let similar = null;
   const result = withLock(home, () => {
     if (entryExists(t.abs, text)) return 'duplicate';
     if (fs.existsSync(t.abs)) {
@@ -646,6 +667,14 @@ export function cmdAdd(text, flags) {
         nearLine = near.line;
         return 'near-duplicate';
       }
+    }
+    // Looser check across every live file before piling up another
+    // near-copy: the same fact restated in different words is the common
+    // case (three cp1252 entries). Session state churns by design, and
+    // --new is the explicit "yes, this is distinct" escape hatch.
+    if (flags.kind !== 'state' && !flags.new) {
+      similar = similarEntry(text, allLiveEntries(home));
+      if (similar) return 'similar';
     }
     if (created) {
       fs.mkdirSync(path.dirname(t.abs), { recursive: true });
@@ -668,6 +697,15 @@ export function cmdAdd(text, flags) {
       id
         ? `near-duplicate of [id ${id}] ${nearLine.trim()} — not saved; revise it with \`amr update ${id} "..."\` instead`
         : `near-duplicate of ${nearLine?.trim()} — not saved; revise the existing entry with \`amr update\` instead`
+    );
+    return;
+  }
+  if (result === 'similar') {
+    const id = entryId(similar.line);
+    out(
+      id
+        ? `similar to [id ${id}] ${similar.line.trim()} (in ${similar.rel}) — not saved. If this replaces it: \`amr supersede ${id} "..."\` (old entry kept in archive); if it only refreshes it: \`amr update ${id} "..."\`; if it is genuinely distinct: re-run with --new`
+        : `similar to ${similar.line.trim()} (in ${similar.rel}) — not saved. Revise it with \`amr update\`, or re-run with --new if genuinely distinct`
     );
     return;
   }
@@ -739,20 +777,28 @@ export function cmdUpdate(match, text, flags) {
   // --durable or --ttl 0 drops expiry; --ttl N sets an explicit span; a
   // durable entry (no expires:) stays durable unless --ttl is passed.
   const hadExpiry = /expires:\s*\d{4}-\d{2}-\d{2}/.test(keptMeta);
-  const stripped = keptMeta.replace(/;?\s*(?:updated|expires):[^;\]]*/g, '');
+  const newVerify =
+    typeof flags.verify === 'string' && flags.verify.trim()
+      ? `; verify: ${encodeVerify(flags.verify.trim())}`
+      : '';
+  // --verify on update replaces the check command; otherwise it is kept.
+  const stripped = keptMeta.replace(
+    newVerify ? /;?\s*(?:updated|expires|verify):[^;\]]*/g : /;?\s*(?:updated|expires):[^;\]]*/g,
+    ''
+  );
   let exp = null;
   if (!flags.durable) {
     const ttl =
       flags.ttl !== undefined
         ? numFlag(flags.ttl, 0)
         : hadExpiry
-          ? numFlag(cfg.defaultTtlDays, DEFAULT_TTL_DAYS)
+          ? ttlDays(text, cfg, entryKind(l))
           : 0;
     if (ttl > 0) exp = addDays(ttl);
   }
   const meta = keptMeta
-    ? ` ${stripped.replace(/\]$/, `${exp ? `; expires: ${exp}` : ''}; updated: ${today()}]`)}`
-    : ` [updated: ${today()}]`;
+    ? ` ${stripped.replace(/\]$/, `${exp ? `; expires: ${exp}` : ''}${newVerify}; updated: ${today()}]`)}`
+    : ` [updated: ${today()}${newVerify}]`;
   lines[i] = `- ${text.replace(/\s+/g, ' ').trim()}${meta}`;
   withLock(home, () => {
     fs.writeFileSync(t.abs, lines.join('\n'));

@@ -52,7 +52,19 @@ export function similarity(a, b) {
   return inter / (x.size + y.size - inter);
 }
 
-export const isNearDuplicate = (text, others) =>
+// Overlap coefficient: shared tokens over the smaller token set. Catches a
+// short entry restating a long one (Jaccard dilutes it with the long one's
+// extra words), e.g. the same pitfall saved twice at different lengths.
+export function overlap(a, b) {
+  const x = words(a);
+  const y = words(b);
+  if (!x.size || !y.size) return 0;
+  let inter = 0;
+  for (const w of x) if (y.has(w)) inter++;
+  return inter / Math.min(x.size, y.size);
+}
+
+export const isNearDuplicate =(text, others) =>
   others.some((o) => similarity(text, o) >= SIMILAR);
 
 // Best near-duplicate among existing entry lines, or null. Used by

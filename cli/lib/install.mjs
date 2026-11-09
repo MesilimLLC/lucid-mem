@@ -577,7 +577,34 @@ function mergeHooksIntoCfg(cfg, entries) {
   return added;
 }
 
-function mergeClaudeSettings(file, entries) {
+// Remove amr's `key` command from an event's hooks (an upgrade that moves a
+// hook to another event, e.g. recall PostToolUse -> PostToolUseFailure).
+// Foreign hooks in the same entry are kept. Returns labels of what went.
+function retireHooks(cfg, retire) {
+  const gone = [];
+  for (const [event, key] of retire) {
+    const list = cfg.hooks?.[event];
+    if (!Array.isArray(list)) continue;
+    const kept = [];
+    for (const e of list) {
+      const hooks = e?.hooks;
+      if (!Array.isArray(hooks)) {
+        kept.push(e);
+        continue;
+      }
+      const rest = hooks.filter(
+        (h) => !(typeof h?.command === 'string' && h.command.includes(`amr.mjs" ${key}`))
+      );
+      if (rest.length !== hooks.length) gone.push(`-${event}:${key}`);
+      if (rest.length) kept.push({ ...e, hooks: rest });
+    }
+    if (kept.length) cfg.hooks[event] = kept;
+    else delete cfg.hooks[event];
+  }
+  return gone;
+}
+
+function mergeClaudeSettings(file, entries, retire = []) {
   let cfg = {};
   if (fs.existsSync(file)) {
     try {
@@ -586,7 +613,7 @@ function mergeClaudeSettings(file, entries) {
       throw new Error(`cannot parse ${file}; leaving it untouched`);
     }
   }
-  const added = mergeHooksIntoCfg(cfg, entries);
+  const added = [...retireHooks(cfg, retire), ...mergeHooksIntoCfg(cfg, entries)];
   if (added.length) {
     backup(file);
     fs.writeFileSync(file, JSON.stringify(cfg, null, 2) + '\n');
@@ -607,9 +634,8 @@ const MUSE_HOOK_ENTRIES = [
     e === 'sessionStart' ? 'context --hook' : s,
   ]),
   // Muse fires PostToolUseFailure instead of PostToolUse when a tool
-  // fails; recall is silent unless the output matches a known pitfall.
-  // No matcher: Muse's tool names are lowercase (bash, read_file...).
-  ['PostToolUse', 'recall --hook'],
+  // fails, so recall rides that event alone. No matcher: Muse's tool
+  // names are lowercase (bash, read_file...).
   ['PostToolUseFailure', 'recall --hook'],
   ['Stop', 'reflect'],
 ];
@@ -633,7 +659,10 @@ function mergeMuseSettings(file) {
     cfg.schema_version = 1;
     changed = true;
   }
-  const added = mergeHooksIntoCfg(cfg, MUSE_HOOK_ENTRIES);
+  const added = [
+    ...retireHooks(cfg, [['PostToolUse', 'recall']]),
+    ...mergeHooksIntoCfg(cfg, MUSE_HOOK_ENTRIES),
+  ];
   if (added.length) changed = true;
   const legacy = !!cfg.mcp_servers;
   const key = legacy ? 'mcp_servers' : 'mcpServers';
@@ -697,10 +726,9 @@ function unmergeMuseSettings(file) {
 
 // Devin CLI user config carries hooks and MCP servers together.
 // Hook shape matches Claude Code (SessionStart stdout injects context;
-// PostToolUse recall is silent unless the error matches a known
-// pitfall, so no matcher — Devin's shell tool is `exec`, but an
-// unmatched recall firing costs nothing). No PostToolUseFailure:
-// Devin's documented events end at PostToolUse.
+// PostToolUse recall acts only when the payload shows a failure and is
+// silent otherwise, so no matcher — Devin's shell tool is `exec`). No
+// PostToolUseFailure: Devin's documented events end at PostToolUse.
 const DEVIN_HOOK_ENTRIES = [
   ...HOOK_ENTRIES.map(([e, s]) => [
     e[0].toUpperCase() + e.slice(1),
@@ -846,13 +874,15 @@ export function cmdInstall(flags) {
             // re-injection can be suppressed or delta-only.
             e === 'sessionStart' ? 'context --hook' : s,
           ]),
-          // Failure-triggered recall: surface the one relevant pitfall
-          // when a shell tool errors, not in the session-start dump.
-          ['PostToolUse', 'recall --hook', 'Bash'],
+          // Failure-triggered recall: surface possibly relevant memory
+          // when a shell tool fails. PostToolUseFailure, not PostToolUse:
+          // Claude Code fires it only on real failures, so successful
+          // output (grep hits, source files, CI logs) never reaches recall.
+          ['PostToolUseFailure', 'recall --hook', 'Bash'],
           // Stop supports block-and-continue: `amr reflect` asks the
           // session to save durable learnings the user never stated.
           ['Stop', 'reflect'],
-        ]);
+        ], [['PostToolUse', 'recall']]);
         did.push(
           added.length
             ? `hooks +${added.join(',')} in ${file}`

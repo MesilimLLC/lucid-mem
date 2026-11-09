@@ -366,6 +366,60 @@ export const isExpired = (line, now = today()) => {
 // durable forever (legacy entries, `--durable`, `--ttl 0`).
 export const DEFAULT_TTL_DAYS = 30;
 
+// Hosting and deploy facts (what serves a site, which platform deploys it)
+// go stale fastest: the platform gets swapped and nothing flags the old
+// entry. They get a shorter default TTL (cfg.hostingTtlDays overrides).
+// Pitfalls, how-tos and preferences are about method, not infrastructure,
+// so they keep the normal TTL.
+export const HOSTING_TTL_DAYS = 14;
+const HOSTING_RE =
+  /\b(?:deploy(?:s|ed|ment|ments|ing)?|hosted|hosting|served\s+(?:live\s+)?(?:from|on|by)|workers\.dev|pages\.dev|cloudflare|vercel|netlify|lovable|fly\.io|heroku|dns|nameservers?|cname|production\s+(?:url|site|host))\b/i;
+export const looksHosting = (text) => HOSTING_RE.test(String(text));
+
+// Default TTL in days for an entry's text and kind.
+export function ttlDays(text, cfg = {}, kind = null) {
+  if (kind === 'state') return STATE_TTL_DAYS;
+  const base = numFlag(cfg.defaultTtlDays, DEFAULT_TTL_DAYS);
+  if (kind === 'pitfall' || kind === 'howto' || kind === 'preference') return base;
+  return looksHosting(text) ? Math.min(base, numFlag(cfg.hostingTtlDays, HOSTING_TTL_DAYS)) : base;
+}
+
+// `--verify "<cmd>"`: a command that re-checks the fact. It lives in the
+// entry's meta, where ; and brackets are structural, so those are
+// percent-escaped. It is only ever shown, never run: memory is data.
+export const encodeVerify = (cmd) =>
+  String(cmd).replace(/[%;[\]]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0')}`);
+export const decodeVerify = (s) =>
+  String(s).replace(/%(25|3B|5B|5D)/g, (_, h) => String.fromCharCode(parseInt(h, 16)));
+export const entryVerify = (line) => {
+  const m = trailingMeta(line).match(/verify:\s*([^;]*)/);
+  return m ? decodeVerify(m[1].trim()) : null;
+};
+
+// How an entry is shown in a digest or recall: legacy bare-date meta gets
+// its `added:` label, a `confirmed:` date appears when `amr used` is newer
+// than the last write (so staleness is judgeable at a glance), and a
+// verify command moves out of the meta into the body where it is read.
+export function renderEntry(line, usedAtMs = null) {
+  const m = String(line).match(/\[([^[\]]*)\]\s*$/);
+  if (!m) return line;
+  const body = line.slice(0, m.index).trimEnd();
+  let fields = m[1].split(';').map((f) => f.trim()).filter(Boolean);
+  fields = fields.map((f) => (/^\d{4}-\d{2}-\d{2}$/.test(f) ? `added: ${f}` : f));
+  const verify = entryVerify(line);
+  fields = fields.filter((f) => !/^verify:/.test(f));
+  const dates = fields
+    .map((f) => (f.match(/^(?:added|updated):\s*(\d{4}-\d{2}-\d{2})/) || [])[1])
+    .filter(Boolean)
+    .sort();
+  if (usedAtMs) {
+    const used = new Date(usedAtMs).toISOString().slice(0, 10);
+    if (!dates.length || used > dates[dates.length - 1]) fields.push(`confirmed: ${used}`);
+  }
+  const tail = verify ? ` (verify: \`${verify}\`)` : '';
+  return `${body}${tail} [${fields.join('; ')}]`;
+}
+
 // Tokenize entry/prose text for overlap scoring: lowercase words of
 // 3+ chars, entry meta bracket stripped so `id:`/`kind:` never match.
 export const entryTokens = (s) =>

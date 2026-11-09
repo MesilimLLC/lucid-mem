@@ -37,7 +37,7 @@ This release closes the loop on growth: entries expire by default, retired ones 
 |---|---|---|
 | **Quieter reflection** | `amr reflect` fires only after real work — six or more changing actions (edits, or shell commands that write, commit, or push), or twenty tool calls of any kind, which also catches investigation-only sessions — and runs as a detached background judge. Nothing prints in the session. | Memory improves without interrupting the person doing the work. |
 | **Reviewable learning** | Judge proposals land in `dreams/pending-reflections.md` and surface at the next session. Adds can auto-save; updates always wait for review. Overflow/expired items archive to `dreams/reflection-archive.md` instead of being dropped. | The agent can learn without silently rewriting what you know. |
-| **Kinds and expiry** | Entries carry `pitfall`, `decision`, `preference`, `fact`, `howto`, or `state`. Everything expires by default: `state` in two days, other kinds in 30 (`--ttl N` overrides, `--durable` opts out). Expired entries drop out of context and recall; `amr update` renews the clock, and `dream --fix` renews recently used ones instead of dropping them. | Memory ages like knowledge does; nothing has to be manually swept. |
+| **Kinds and expiry** | Entries carry `pitfall`, `decision`, `preference`, `fact`, `howto`, or `state`. Everything expires by default: `state` in two days, hosting/deploy facts in 14, other kinds in 30 (`--ttl N` overrides, `--durable` opts out). Expired entries drop out of context and recall; `amr update` renews the clock, and `dream --fix` renews recently used ones instead of dropping them. | Memory ages like knowledge does; nothing has to be manually swept. |
 | **Stable identity** | Every entry gets a short id such as `a3f9`: `amr update <id>`, `amr supersede <id>`, `amr delete <id>`, `amr used <id>`, `amr ids`. | Memory can be corrected, retired, removed, and credited instead of appended forever. |
 | **Ranked context** | `amr context` ranks by kind, recency (60-day half-life), explicit use, and relevance to the current work (project, cwd, branch, recent files, transcript tail) inside a shared 6,000-character budget (`--budget`, `contextBudget`). `--full` opts out. | The digest stays small and relevant as the corpus grows. |
 | **Budget-pressure consolidation** | When a live file's entries cross ~80% of the digest budget, `amr add` and `amr dream` queue concrete merge/delete proposals (`[consolidate]` items) into the pending-candidates review queue instead of letting the next write silently rank out. | The store consolidates before it hits the wall, and nothing is rewritten without review. |
@@ -97,8 +97,9 @@ amr sync
 |---|---|
 | `amr ensure` | Idempotent init: `git init`, `MEMORY.md`, first commit. Never touches global git config. |
 | `amr context [dir]` | Ranked session digest. Project-scoped inside a known repo; global plus a pooled digest outside. `--budget N`, `--also a,b`, `--full`. Budget is spent on the current project's entries first, then pooled projects, then globals. As a Claude Code SessionStart hook (`--hook`), an unchanged compaction re-injection is suppressed and a changed one sends only new entries. |
-| `amr recall ["error"]` | Failure-triggered recall: the live entry matching a tool error (heredoc/CS1010, shell EOF, Python `SyntaxError`, cp1252 to start), or nothing. Wired as a Claude Code `PostToolUse` (Bash) hook with `--hook`; also runnable by hand. An entry already shown is not re-injected into the same session. |
-| `amr add "text"` | Save a memory. `--project[=name]`, `--file topic`, `--kind`, `--ttl N` days (default 30, or 2 for `state`; `0` = durable), `--durable` to opt out of expiry. Refuses secret-shaped input, warns on session-state detail, and on a near-duplicate points at `amr update <id>` instead of saving a copy. |
+| `amr recall ["error"]` | Failure-triggered recall: at most two entries possibly relevant to a real tool failure, or nothing. Wired as a Claude Code `PostToolUseFailure` (Bash) hook with `--hook`; also runnable by hand. Acts only on a failure (a failure event, `is_error`, a non-zero exit code, `interrupted`), never for read-only tools (`Read`, `Grep`, `Glob`), and scores only the lines that report the failure (error lines plus 2 lines of context, about 2 KB), never the tool input. Entries tagged with a project fire only in that project (or a linked one); a non-trigger match needs two shared words, one of them rare (in 2 or fewer live entries); near-duplicate hits collapse to one. An entry already shown is not re-injected into the same session. |
+| `amr unhelpful <id...> ["error"]` | Mute a recalled entry for that kind of error (learned from its last recall, or from the error text given). Local to the machine, never committed. |
+| `amr add "text"` | Save a memory. `--project[=name]`, `--file topic`, `--kind`, `--ttl N` days (default 30, 14 for hosting/deploy facts, 2 for `state`; `0` = durable), `--durable` to opt out of expiry, `--verify "<cmd>"` to attach a command that re-checks the fact (shown with the entry, never run). Refuses secret-shaped input, warns on session-state detail, and when a similar entry exists in any live file offers `amr supersede <id>` / `amr update <id>` instead of saving a copy (`--new` overrides). |
 | `amr update <id> "text"` | Replace an entry by id or unique text match, preserving metadata. Rolls the entry's expiry forward (`--ttl N`, `--durable` to change it). |
 | `amr supersede <id> ["text"]` | Retire an entry to `archive/superseded.md`, optionally with a replacement. Provenance-preserving. |
 | `amr delete <id>` (`rm`) | Remove an entry entirely — nothing stays in the tree. Recovery path is git history: `amr search --history "term"`. |
@@ -121,13 +122,13 @@ amr sync
 | Host | Rules | Hooks | MCP |
 |---|---|---|---|
 | Cursor | `.cursor/rules/lucid-mem.mdc` | `sessionStart`/`sessionEnd` | `mcp.json` |
-| Claude Code | `~/.claude/CLAUDE.md` | `SessionStart`/`SessionEnd`, `Stop` reflect | `~/.claude.json` |
+| Claude Code | `~/.claude/CLAUDE.md` | `SessionStart`/`SessionEnd`, `PostToolUseFailure` recall (Bash), `Stop` reflect | `~/.claude.json` |
 | Windsurf | `global_rules.md` | `sessionStart`/`sessionEnd` | `mcp_config.json` |
 | Devin CLI | `devin/AGENTS.md` | `SessionStart` context, `PostToolUse` recall, `Stop` reflect, `SessionEnd` sync/dream/coverage in the user `config.json` | user `config.json` (`mcpServers`) |
 | Copilot CLI | `~/.copilot/AGENTS.md` | - | - |
 | Codex | `~/.codex/AGENTS.md` | - | `config.toml` |
 | Cline | `~/Documents/Cline/Rules/`, `~/.cline/AGENTS.md` | - | `~/.cline/mcp.json` |
-| Muse | `~/.config/muse/AGENTS.md` | `SessionStart` context, `PostToolUse`/`PostToolUseFailure` recall, `Stop` reflect, `SessionEnd` sync/dream/coverage in `settings.json` | `settings.json` (`mcpServers`) |
+| Muse | `~/.config/muse/AGENTS.md` | `SessionStart` context, `PostToolUseFailure` recall, `Stop` reflect, `SessionEnd` sync/dream/coverage in `settings.json` | `settings.json` (`mcpServers`) |
 | Hermes Agent | `SOUL.md` (`$HERMES_HOME`) | shell hooks in `config.yaml`: `pre_llm_call` inject, `post_compaction` re-arm | `config.yaml` (`mcp_servers`) |
 | Claude Desktop | - | - | `claude_desktop_config.json` |
 | Antigravity | `~/.gemini/GEMINI.md` | - | `mcp_config.json` |

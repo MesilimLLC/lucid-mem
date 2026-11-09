@@ -825,12 +825,145 @@ function stampBlock(file, content, { append }) {
   return 'appended';
 }
 
-export function cmdInstall(flags) {
+// Status line for a merge that reports true (added), false (already
+// wired) or a string (left untouched, with the reason).
+const mcpStatus = (res, file) =>
+  res === true
+    ? `mcp +agent-memory in ${file}`
+    : res === false
+    ? `mcp already wired in ${file}`
+    : `mcp ${res}: ${file}`;
+
+const hooksStatus = (added, file) =>
+  added.length
+    ? `hooks +${added.join(',')} in ${file}`
+    : `hooks already wired in ${file}`;
+
+// Hook entries for Claude Code's settings.json.
+function claudeHookEntries() {
+  return [
+    ...HOOK_ENTRIES.map(([e, s]) => [
+      e[0].toUpperCase() + e.slice(1),
+      // SessionStart reads its payload (--hook) so a compaction
+      // re-injection can be suppressed or delta-only.
+      e === 'sessionStart' ? 'context --hook' : s,
+    ]),
+    // Failure-triggered recall: surface possibly relevant memory
+    // when a shell tool fails. PostToolUseFailure, not PostToolUse:
+    // Claude Code fires it only on real failures, so successful
+    // output (grep hits, source files, CI logs) never reaches recall.
+    ['PostToolUseFailure', 'recall --hook', 'Bash'],
+    // Stop supports block-and-continue: `amr reflect` asks the
+    // session to save durable learnings the user never stated.
+    ['Stop', 'reflect'],
+  ];
+}
+
+function wireHooksJson(h) {
+  if (!h.hooksJson) return [];
+  const file = h.hooksJson();
+  return [hooksStatus(mergeHooksJson(file, HOOK_ENTRIES), file)];
+}
+
+function wireClaudeSettings(h) {
+  if (!h.settingsJson) return [];
+  const file = h.settingsJson();
+  const added = mergeClaudeSettings(file, claudeHookEntries(), [['PostToolUse', 'recall']]);
+  return [hooksStatus(added, file)];
+}
+
+function wireRules(h) {
+  if (!h.rules) return [];
+  const did = [];
+  for (const r of h.rules()) {
+    const res = stampBlock(r.path, r.content, { append: r.append });
+    did.push(`rules ${res}: ${r.path}`);
+    for (const old of r.legacyPaths || []) {
+      const gone = unstampRules(old);
+      if (gone !== 'absent') did.push(`legacy rules ${gone}: ${old}`);
+    }
+  }
+  return did;
+}
+
+function wireMcpJson(h) {
+  if (!h.mcpJson) return [];
+  const file = h.mcpJson();
+  return [mcpStatus(mergeMcpJson(file, h.mcpEntry), file)];
+}
+
+function wireMcpToml(h) {
+  if (!h.mcpToml) return [];
+  const file = h.mcpToml();
+  return [mcpStatus(mergeMcpToml(file), file)];
+}
+
+function wireMcpOpencode(h) {
+  if (!h.mcpOpencode) return [];
+  const file = h.mcpOpencode();
+  return [mcpStatus(mergeMcpOpencode(file), file)];
+}
+
+function wireMcpZed(h) {
+  if (!h.mcpZed) return [];
+  const file = h.mcpZed();
+  return [mcpStatus(mergeMcpZed(file), file)];
+}
+
+function wireMuse(h) {
+  if (!h.museSettings) return [];
+  const file = h.museSettings();
+  const res = mergeMuseSettings(file);
+  return [hooksStatus(res.hooks, file), mcpStatus(res.mcp, file)];
+}
+
+function wireDevin(h) {
+  if (!h.devinConfig) return [];
+  const file = h.devinConfig();
+  const res = mergeDevinSettings(file);
+  return [hooksStatus(res.hooks, file), mcpStatus(res.mcp, file)];
+}
+
+function wireHermesYaml(h) {
+  if (!h.configYaml) return [];
+  const file = h.configYaml();
+  const m = mergeMcpYaml(file);
+  const hk = mergeHermesHooks(file);
+  return [
+    mcpStatus(m, file),
+    hk === true
+      ? `hooks +pre_llm_call,post_compaction in ${file}`
+      : hk === false
+      ? `hooks already wired in ${file}`
+      : `hooks ${hk}: ${file}`,
+  ];
+}
+
+const HOST_WIRING = [
+  wireHooksJson,
+  wireClaudeSettings,
+  wireRules,
+  wireMcpJson,
+  wireMcpToml,
+  wireMcpOpencode,
+  wireMcpZed,
+  wireMuse,
+  wireDevin,
+  wireHermesYaml,
+];
+
+// Wire one host; returns its status lines. Throws if a merge fails, in
+// which case the caller reports the host as failed and prints nothing.
+const wireHost = (h) => HOST_WIRING.flatMap((wire) => wire(h));
+
+// Host names to install into, or null (exit code set) when --host names
+// an unknown host. Every requested name is validated before touching any
+// host, so a typo in `--host codex,bogus` fails the run instead of being
+// silently dropped.
+function selectHosts(flags) {
   const requested = flags.host
     ? String(flags.host).split(',').map((s) => s.trim()).filter(Boolean)
     : null;
-  // Validate every requested name before touching any host, so a typo in
-  // `--host codex,bogus` fails the run instead of being silently dropped.
   if (requested) {
     const bad = requested.filter((r) => r !== 'all' && !Object.keys(HOSTS).includes(r));
     if (bad.length) {
@@ -838,159 +971,29 @@ export function cmdInstall(flags) {
         `unknown host(s): ${bad.join(', ')} (known: ${Object.keys(HOSTS).join(', ')})\n`
       );
       process.exitCode = 1;
-      return;
+      return null;
     }
   }
-  const names = Object.keys(HOSTS).filter(
+  return Object.keys(HOSTS).filter(
     (n) =>
       requested
         ? requested.includes('all') || requested.includes(n)
         : HOSTS[n].detect()
   );
+}
+
+export function cmdInstall(flags) {
+  const names = selectHosts(flags);
+  if (!names) return;
   if (!names.length) {
     out('no known agent hosts detected; use --host <name> to force');
     return;
   }
   const failed = [];
   for (const name of names) {
-    const h = HOSTS[name];
-    const did = [];
+    let did;
     try {
-      if (h.hooksJson) {
-        const file = h.hooksJson();
-        const added = mergeHooksJson(file, HOOK_ENTRIES);
-        did.push(
-          added.length
-            ? `hooks +${added.join(',')} in ${file}`
-            : `hooks already wired in ${file}`
-        );
-      }
-      if (h.settingsJson) {
-        const file = h.settingsJson();
-        const added = mergeClaudeSettings(file, [
-          ...HOOK_ENTRIES.map(([e, s]) => [
-            e[0].toUpperCase() + e.slice(1),
-            // SessionStart reads its payload (--hook) so a compaction
-            // re-injection can be suppressed or delta-only.
-            e === 'sessionStart' ? 'context --hook' : s,
-          ]),
-          // Failure-triggered recall: surface possibly relevant memory
-          // when a shell tool fails. PostToolUseFailure, not PostToolUse:
-          // Claude Code fires it only on real failures, so successful
-          // output (grep hits, source files, CI logs) never reaches recall.
-          ['PostToolUseFailure', 'recall --hook', 'Bash'],
-          // Stop supports block-and-continue: `amr reflect` asks the
-          // session to save durable learnings the user never stated.
-          ['Stop', 'reflect'],
-        ], [['PostToolUse', 'recall']]);
-        did.push(
-          added.length
-            ? `hooks +${added.join(',')} in ${file}`
-            : `hooks already wired in ${file}`
-        );
-      }
-      if (h.rules) {
-        for (const r of h.rules()) {
-          const res = stampBlock(r.path, r.content, { append: r.append });
-          did.push(`rules ${res}: ${r.path}`);
-          for (const old of r.legacyPaths || []) {
-            const gone = unstampRules(old);
-            if (gone !== 'absent') did.push(`legacy rules ${gone}: ${old}`);
-          }
-        }
-      }
-      if (h.mcpJson) {
-        const file = h.mcpJson();
-        const res = mergeMcpJson(file, h.mcpEntry);
-        did.push(
-          res === true
-            ? `mcp +agent-memory in ${file}`
-            : res === false
-            ? `mcp already wired in ${file}`
-            : `mcp ${res}: ${file}`
-        );
-      }
-      if (h.mcpToml) {
-        const file = h.mcpToml();
-        did.push(
-          mergeMcpToml(file)
-            ? `mcp +agent-memory in ${file}`
-            : `mcp already wired in ${file}`
-        );
-      }
-      if (h.mcpOpencode) {
-        const file = h.mcpOpencode();
-        const res = mergeMcpOpencode(file);
-        did.push(
-          res === true
-            ? `mcp +agent-memory in ${file}`
-            : res === false
-            ? `mcp already wired in ${file}`
-            : `mcp ${res}: ${file}`
-        );
-      }
-      if (h.mcpZed) {
-        const file = h.mcpZed();
-        const res = mergeMcpZed(file);
-        did.push(
-          res === true
-            ? `mcp +agent-memory in ${file}`
-            : res === false
-            ? `mcp already wired in ${file}`
-            : `mcp ${res}: ${file}`
-        );
-      }
-      if (h.museSettings) {
-        const file = h.museSettings();
-        const res = mergeMuseSettings(file);
-        did.push(
-          res.hooks.length
-            ? `hooks +${res.hooks.join(',')} in ${file}`
-            : `hooks already wired in ${file}`
-        );
-        did.push(
-          res.mcp === true
-            ? `mcp +agent-memory in ${file}`
-            : res.mcp === false
-            ? `mcp already wired in ${file}`
-            : `mcp ${res.mcp}: ${file}`
-        );
-      }
-      if (h.devinConfig) {
-        const file = h.devinConfig();
-        const res = mergeDevinSettings(file);
-        did.push(
-          res.hooks.length
-            ? `hooks +${res.hooks.join(',')} in ${file}`
-            : `hooks already wired in ${file}`
-        );
-        did.push(
-          res.mcp === true
-            ? `mcp +agent-memory in ${file}`
-            : res.mcp === false
-            ? `mcp already wired in ${file}`
-            : `mcp ${res.mcp}: ${file}`
-        );
-      }
-      if (h.configYaml) {
-        const file = h.configYaml();
-        const m = mergeMcpYaml(file);
-        did.push(
-          m === true
-            ? `mcp +agent-memory in ${file}`
-            : m === false
-            ? `mcp already wired in ${file}`
-            : `mcp ${m}: ${file}`
-        );
-        const hk = mergeHermesHooks(file);
-        did.push(
-          hk === true
-            ? `hooks +pre_llm_call,post_compaction in ${file}`
-            : hk === false
-            ? `hooks already wired in ${file}`
-            : `hooks ${hk}: ${file}`
-        );
-      }
+      did = wireHost(HOSTS[name]);
     } catch (e) {
       err(`${name}: ${e.message}`);
       failed.push(name);

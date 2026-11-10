@@ -6,16 +6,15 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
-  DEFAULT_TTL_DAYS,
   addDays,
   commit,
   ensureRepo,
   git,
   hasRemote,
   loadConfig,
-  numFlag,
   today,
   trailingMeta,
+  ttlDays,
   withLock,
 } from './core.mjs';
 import { drainReflections } from './pending.mjs';
@@ -165,9 +164,10 @@ export function cmdSupersede(id, text) {
       // A replacement of a TTL'd entry gets a fresh TTL, same as an
       // update; replacing a durable entry stays durable.
       if (/expires:\s*\d{4}-\d{2}-\d{2}/.test(old))
-        meta.push(
-          `expires: ${addDays(numFlag(loadConfig(home).defaultTtlDays, DEFAULT_TTL_DAYS))}`
-        );
+        meta.push(`expires: ${addDays(ttlDays(text, loadConfig(home), kind))}`);
+      // The check command describes the thing, not the wording: it carries over.
+      const verify = (trailingMeta(old).match(/verify:\s*([^;]*)/) || [])[1];
+      if (verify) meta.push(`verify: ${verify.trim()}`);
       if (proj) meta.push(`project: ${proj.trim()}`);
       meta.push(`supersedes: ${id}`, `id: ${newid}`);
       lines[hit.line] = `- ${text.replace(/\s+/g, ' ').trim()} [${meta.join('; ')}]`;

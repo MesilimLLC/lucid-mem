@@ -7,7 +7,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { entryKind, entryTokens } from './core.mjs';
+import { entryKind, entryTokens, trailingMeta } from './core.mjs';
 import { entryId } from './ids.mjs';
 
 export const DEFAULT_BUDGET = 6000; // chars of entries, roughly 1.5k tokens
@@ -54,11 +54,20 @@ export function bumpUsage(home, ids, now = Date.now()) {
 }
 
 const latestDate = (line) => {
-  const ds = [...line.matchAll(/(?:added|updated):\s*(\d{4}-\d{2}-\d{2})/g)]
-    .map((m) => m[1])
-    .sort();
+  const ds = [...line.matchAll(/(?:added|updated):\s*(\d{4}-\d{2}-\d{2})/g)].map((m) => m[1]);
+  // Legacy meta carries a bare leading date: "[ 2026-10-24; kind: ...]".
+  const bare = trailingMeta(line).match(/^\s*(\d{4}-\d{2}-\d{2})/);
+  if (bare) ds.push(bare[1]);
+  ds.sort();
   return ds.length ? ds[ds.length - 1] : null;
 };
+
+// An entry nobody ever marked `amr used` has never been shown to help.
+// After a grace period that ranks it below entries with a track record, so
+// session-start budget goes to memory that earned it. Fresh entries are
+// exempt: they have had no chance to be used yet.
+const UNUSED_GRACE_DAYS = 14;
+const UNUSED_FACTOR = 0.75;
 
 // Relevance to the current work: shared tokens between the entry and the
 // session's work signal (project/cwd/branch/recent-commit/transcript
@@ -80,6 +89,7 @@ export function scoreEntry(line, usage = {}, isNoise = () => false, now = Date.n
   s *= Math.pow(0.5, ageDays / HALF_LIFE_DAYS);
   const u = usage[entryId(line)];
   if (u && now - u.last < USAGE_WINDOW_DAYS * 864e5) s *= 1 + 0.5 * Math.log2(1 + u.n);
+  else if (!u && kind !== 'state' && (!d || ageDays >= UNUSED_GRACE_DAYS)) s *= UNUSED_FACTOR;
   if (kind !== 'state' && isNoise(line)) s *= 0.3;
   s *= 1 + 0.6 * relevanceWeight(line, signal);
   return s;

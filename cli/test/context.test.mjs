@@ -130,7 +130,8 @@ test('context ranks by kind/recency within a budget; `amr used` boosts entries, 
   fs.writeFileSync(mem, `# Memory\n\n${rows.join('\n')}\n\n## Index\n`);
   const tight = run0(['context', '--budget', '10']).stdout;
   assert.match(tight, /When CI flakes/);
-  assert.match(tight, /lower-ranked entries omitted/);
+  // Global entries are not about the current repo, so no "N omitted" pointer.
+  assert.doesNotMatch(tight, /entries omitted/);
   assert.equal((tight.match(/old filler fact/g) || []).length, 2);
   // Surfacing an entry in a search is not a use: it must not rank higher.
   run0(['search', 'number 7']);

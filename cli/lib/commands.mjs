@@ -240,13 +240,20 @@ function saveContextState(home, state) {
 }
 
 // Hook-mode emission. Claude Code (context --hook, SessionStart):
-// remember which bullets this session already saw. A compaction
-// re-injection (source=compact) with no new bullets prints nothing;
-// with new ones it prints only those. Anything else is a full digest.
+// remember which bullets this session already saw. A compaction or
+// resume re-injection (source=compact|resume) of a session that was
+// already injected prints only entries it has not seen, or nothing.
+// Only memory entries (bullets carrying `[added:` metadata) count as
+// new: count notes ("… 12 lower-ranked entries omitted", the pending
+// pointer) and dated queue lines change on every run without carrying
+// new memory. Anything else is a full digest.
 // Hermes (context --hermes, shell hooks): pre_llm_call gets the digest
 // as {"context": ...} once per session; post_compaction clears the
 // session's record (handled in cmdContext) so the next pre_llm_call
 // re-injects. State lives in .git (local, never committed).
+const DELTA_SOURCES = new Set(['compact', 'resume']);
+const isMemoryEntry = (line) => /\[added: \d{4}-\d{2}-\d{2}/.test(line);
+
 function emitContext(home, text, flags, payload) {
   if (flags.hermes) {
     const sid = payload?.session_id;
@@ -266,9 +273,9 @@ function emitContext(home, text, flags, payload) {
   const prev = state[sid];
   state[sid] = { bullets, at: Date.now() };
   saveContextState(home, state);
-  if (payload.source === 'compact' && prev) {
+  if (DELTA_SOURCES.has(payload.source) && prev) {
     const seen = new Set(prev.bullets);
-    const fresh = bullets.filter((l) => !seen.has(l));
+    const fresh = bullets.filter((l) => isMemoryEntry(l) && !seen.has(l));
     if (!fresh.length) return;
     return out(
       [
@@ -484,15 +491,35 @@ function pooledRecentLines(home, cfg, tools) {
 // next session reviews and saves the real ones.
 // Background-reflection proposals (pending.mjs) share the section: both
 // are unsaved and wait for a session to accept or ignore them.
-function pendingCandidateLines(home, proj) {
+function pendingCandidateItems(home, proj) {
   const pending = path.join(home, 'dreams', 'pending-saves.md');
-  const items = [
+  return [
     ...pendingReflectionLines(home, undefined, proj?.slug ?? null),
     ...(fs.existsSync(pending) ? liveBullets(fs.readFileSync(pending, 'utf8')) : []),
-  ].slice(0, 8);
+  ];
+}
+
+// Hook digests (`--hook`, `--hermes`) carry one pointer line instead of
+// the candidates themselves: they are a review chore, not context, and
+// listing them cost every session a few thousand characters outside the
+// entry budget. `amr review` (and plain `amr context`) list them in full.
+function pendingCandidateLines(home, proj, { pointer = false, limit = 8 } = {}) {
+  const all = pendingCandidateItems(home, proj);
   // Proposals the queue evicted before review wait in the archive, not in
   // the void. One pointer line so the next session can rescue them.
   const archived = archivedReflectionCount(home);
+  if (pointer) {
+    if (!all.length && !archived) return [];
+    const parts = [];
+    if (all.length) parts.push(`${all.length} unsaved candidate(s)`);
+    if (archived) parts.push(`${archived} archived proposal(s)`);
+    return [
+      '',
+      '## Pending memory candidates',
+      `- ${parts.join(' and ')} — run \`amr review\` when there is a natural pause, not mid-task`,
+    ];
+  }
+  const items = limit ? all.slice(0, limit) : all;
   if (archived)
     items.push(
       `- ${archived} older proposal(s) archived unreviewed in dreams/reflection-archive.md — rescue the real ones with \`amr add\` / \`amr update <id>\`, then delete the line`
@@ -503,6 +530,16 @@ function pendingCandidateLines(home, proj) {
     '## Pending memory candidates (unsaved — review, `amr add` / `amr update <id>` / `amr delete <id>` the real ones)',
     items.join('\n'),
   ];
+}
+
+// `amr review` — the full pending-candidate list for the current repo,
+// the surface hook digests point at.
+export function cmdReview(flags) {
+  const home = ensureRepo();
+  const cwd = flags.cwd || process.cwd();
+  const proj = effectiveProject(home, projectFor(cwd));
+  const lines = pendingCandidateLines(home, proj, { limit: 0 });
+  out(lines.length ? lines.slice(1).join('\n') : 'No pending memory candidates.');
 }
 
 // Peer repos: other memory repos attached via `amr peer add`. Each
@@ -560,7 +597,7 @@ function archivePointerLines(home) {
 
 // Stitch the digest sections together in display order.
 function assembleDigest(home, cfg, proj, tools, parts) {
-  const { globalLines, projectSecs, recentLines, indexLinks, unknown } = parts;
+  const { globalLines, projectSecs, recentLines, indexLinks, unknown, hookMode } = parts;
   const lines = [`<agent-memory repo="${home}">`];
   if (globalLines.length) lines.push('## Global', globalLines.join('\n'));
   for (const { a, body } of projectSecs) {
@@ -569,7 +606,7 @@ function assembleDigest(home, cfg, proj, tools, parts) {
   }
   if (recentLines.length)
     lines.push('', '## Recent project memory', recentLines.join('\n'));
-  lines.push(...pendingCandidateLines(home, proj));
+  lines.push(...pendingCandidateLines(home, proj, { pointer: hookMode }));
   if (indexLinks.length) lines.push('', '## Index', indexLinks.join('\n'));
   if (unknown.length)
     lines.push(
@@ -584,6 +621,22 @@ function assembleDigest(home, cfg, proj, tools, parts) {
     '</agent-memory>'
   );
   return lines;
+}
+
+// Index links in a hook digest: topic files stay, but other projects'
+// files and the dreams/ queues are noise for this session (the project
+// sections already carry the attached projects' entries). Plain
+// `amr context` keeps the whole index.
+function relevantIndexLinks(links, attach, hookMode) {
+  if (!hookMode) return links;
+  const attached = new Set(attach.map((a) => `projects/${a.slug}`));
+  return links.filter((l) => {
+    const target = (l.match(/\[\[([^\]]+)\]\]/) || [])[1];
+    if (!target) return true;
+    if (target.startsWith('dreams/')) return false;
+    if (target.startsWith('projects/')) return attached.has(target);
+    return true;
+  });
 }
 
 export function cmdContext(flags) {
@@ -623,7 +676,11 @@ export function cmdContext(flags) {
   const projectSecs = projectSections(home, attach, tools);
   const recentLines = inProject ? [] : pooledRecentLines(home, cfg, tools);
   const globalLines = inProject ? [] : tools.show(tools.cap(liveBullets(idxSplit[0] || ''), 25));
-  const indexLinks = tools.capTail(liveBullets(idxSplit[1] || ''), 12);
+  const hookMode = !!(flags.hook || flags.hermes);
+  const indexLinks = tools.capTail(
+    relevantIndexLinks(liveBullets(idxSplit[1] || ''), attach, hookMode),
+    12
+  );
 
   const lines = assembleDigest(home, cfg, proj, tools, {
     globalLines,
@@ -631,6 +688,7 @@ export function cmdContext(flags) {
     recentLines,
     indexLinks,
     unknown,
+    hookMode,
   });
   emitContext(home, lines.join('\n'), flags, hookPayload);
 }

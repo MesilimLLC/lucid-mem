@@ -236,3 +236,91 @@ test('context clips oversized floor entries so the budget overrun stays bounded'
   // --full is the escape hatch: nothing clipped.
   assert.ok(run0(['context', '--full']).stdout.includes('detail '.repeat(700).trim()));
 });
+
+test('context --hook: pending candidates collapse to a pointer; review and plain context list them', () => {
+  const home = tmpdir();
+  run(['ensure'], { amrHome: home });
+  fs.mkdirSync(path.join(home, 'dreams'), { recursive: true });
+  fs.writeFileSync(
+    path.join(home, 'dreams', 'pending-saves.md'),
+    '# Pending saves\n\n- cache TTL should always be 300\n- deploys need a green canary\n'
+  );
+  const payload = JSON.stringify({ session_id: 'sess-p', source: 'startup', cwd: tmpdir() });
+  const hook = run(['context', '--hook'], { amrHome: home, cwd: tmpdir(), input: payload }).stdout;
+  assert.match(hook, /## Pending memory candidates\n- 2 unsaved candidate\(s\) — run `amr review`/);
+  assert.ok(!hook.includes('cache TTL'), hook);
+
+  const plain = run(['context'], { amrHome: home, cwd: tmpdir() }).stdout;
+  assert.match(plain, /cache TTL should always be 300/);
+
+  const review = run(['review'], { amrHome: home, cwd: tmpdir() });
+  assert.equal(review.status, 0, review.stderr);
+  assert.match(review.stdout, /cache TTL should always be 300/);
+  assert.match(review.stdout, /deploys need a green canary/);
+});
+
+test('amr review with an empty queue says so', () => {
+  const home = tmpdir();
+  run(['ensure'], { amrHome: home });
+  const review = run(['review'], { amrHome: home, cwd: tmpdir() });
+  assert.equal(review.status, 0, review.stderr);
+  assert.match(review.stdout, /No pending memory candidates/);
+});
+
+test('context --hook: resume is a delta and count or queue lines never count as new memory', () => {
+  const home = tmpdir();
+  run(['ensure'], { amrHome: home });
+  run(['add', 'first durable fact'], { amrHome: home });
+  const payload = (source) =>
+    JSON.stringify({ session_id: 'sess-r', source, cwd: tmpdir() });
+  const start = run(['context', '--hook'], { amrHome: home, cwd: tmpdir(), input: payload('startup') });
+  assert.match(start.stdout, /first durable fact/);
+
+  // A new pending candidate changes the pointer line but is not memory.
+  fs.mkdirSync(path.join(home, 'dreams'), { recursive: true });
+  fs.writeFileSync(path.join(home, 'dreams', 'pending-saves.md'), '# Pending saves\n\n- unsaved idea\n');
+  const resume1 = run(['context', '--hook'], { amrHome: home, cwd: tmpdir(), input: payload('resume') });
+  assert.equal(resume1.stdout.trim(), '');
+
+  run(['add', 'second durable fact'], { amrHome: home });
+  const resume2 = run(['context', '--hook'], { amrHome: home, cwd: tmpdir(), input: payload('resume') });
+  assert.match(resume2.stdout, /second durable fact/);
+  assert.ok(!resume2.stdout.includes('first durable fact'));
+  assert.ok(!resume2.stdout.includes('unsaved'), resume2.stdout);
+
+  // A resume of a session never injected (no prior state) is a full digest.
+  const other = run(['context', '--hook'], {
+    amrHome: home,
+    cwd: tmpdir(),
+    input: JSON.stringify({ session_id: 'sess-new', source: 'resume', cwd: tmpdir() }),
+  });
+  assert.match(other.stdout, /first durable fact/);
+});
+
+test('context --hook: index keeps topic files and attached projects, drops dreams and other projects', () => {
+  const home = tmpdir();
+  const repo = initRepo(path.join(tmpdir(), 'app'), 'https://github.com/acme/app.git');
+  run(['ensure'], { amrHome: home });
+  seed(home, repo, 'app uses redis cache');
+  const mem = path.join(home, 'MEMORY.md');
+  const projLink = read(mem).match(/\[\[projects\/app[^\]]*\]\]/)[0];
+  fs.writeFileSync(
+    mem,
+    read(mem).replace(
+      /## Index\n/,
+      '## Index\n- [[pitfalls]]\n- [[dreams/pending-reflections]]\n- [[projects/elsewhere-abc123]]\n'
+    )
+  );
+  const hook = run(['context', '--hook'], {
+    amrHome: home,
+    cwd: repo,
+    input: JSON.stringify({ session_id: 'sess-i', source: 'startup', cwd: repo }),
+  }).stdout;
+  assert.match(hook, /\[\[pitfalls\]\]/);
+  assert.ok(hook.includes(projLink), hook);
+  assert.ok(!hook.includes('dreams/pending-reflections'), hook);
+  assert.ok(!hook.includes('projects/elsewhere-abc123'), hook);
+
+  const plain = run(['context'], { amrHome: home, cwd: repo }).stdout;
+  assert.match(plain, /projects\/elsewhere-abc123/);
+});

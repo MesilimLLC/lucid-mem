@@ -12,6 +12,7 @@ import {
   cmdPolicy,
   cmdReflect,
   cmdRemote,
+  cmdReview,
   cmdSearch,
   cmdSync,
   cmdUnlink,
@@ -33,13 +34,14 @@ const USAGE = `amr: agent memory CLI (lucid-mem)
 usage: amr <command> [args] [flags]
 
   ensure                        create/verify the memory repo ($AMR_HOME, default ~/agent-memory)
-  context [dir] [--budget N]    ranked session digest (default 6000 chars; --full ignores): project-scoped inside a known repo; global + pooled projects outside; --hook (Claude SessionStart) suppresses unchanged compaction re-injections; --hermes (Hermes shell hooks) injects once per session via pre_llm_call, re-arms on post_compaction
+  context [dir] [--budget N]    ranked session digest (default 6000 chars; --full ignores): project-scoped inside a known repo; global + pooled projects outside; --hook (Claude SessionStart) sends only new entries on compaction/resume re-injections and points at "amr review" instead of listing candidates; --hermes (Hermes shell hooks) injects once per session via pre_llm_call, re-arms on post_compaction
   recall ["<error text>"]       surface memory possibly relevant to a tool failure (PostToolUseFailure hook reads the payload on stdin with --hook); acts only on real failures, only this project's entries, silent when nothing matches
   unhelpful <id...> ["<error>"] mute a recalled entry for that kind of error (learns from the last recall, or from the error text given)
   add "text"                    save a memory entry
   update <id|"match"> "text"   replace an entry in place; ids look like a3f9 (shown in entry meta)
   supersede <id> ["text"]       retire an entry to archive/superseded.md, optionally with a replacement
   delete <id>                   remove an entry entirely (alias: rm); recover via "search --history"
+  review [dir]                  list pending memory candidates (unsaved proposals) for this repo
   used <id...>                  mark entries that helped (boosts them in context ranking)
   ids                           assign ids to entries that lack them
   search "term"                 grep all memory files (--history also greps past commits)
@@ -209,6 +211,8 @@ export function main(argv) {
         return cmdCoverage(flags);
       case 'reflect':
         return cmdReflect();
+      case 'review':
+        return cmdReview({ ...flags, cwd: flags.cwd || pos[0] });
       case 'used':
         return cmdUsed(pos);
       case 'ids':

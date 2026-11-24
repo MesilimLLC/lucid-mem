@@ -129,11 +129,13 @@ function quiet(fn) {
   const realOut = process.stdout.write;
   const realErr = process.stderr.write;
   const prevCode = process.exitCode;
+  let threw = false;
   process.stdout.write = (s) => (chunks.push(String(s)), true);
   process.stderr.write = (s) => (chunks.push(String(s)), true);
   try {
     fn();
   } catch (e) {
+    threw = true;
     chunks.push(`error: ${e.message}`);
   } finally {
     process.stdout.write = realOut;
@@ -141,38 +143,63 @@ function quiet(fn) {
   }
   const failed = process.exitCode && process.exitCode !== prevCode;
   process.exitCode = prevCode;
-  return { text: chunks.join(''), failed: !!failed };
+  return { text: chunks.join(''), failed: threw || !!failed };
 }
 
-// Carry out one vetted decision. Returns {ok, note}.
-function applyDecision(home, d, item) {
+// The live text of an entry, as memoryForScope reads it.
+function entryTextById(home, id) {
+  for (const { line } of allLiveEntries(home)) {
+    if (entryId(line) === id) return line.trim().slice(2).replace(/\s*\[[^\]]*\]\s*$/, '');
+  }
+  return null;
+}
+
+// Carry out one vetted decision. Returns {ok, note}. Outcomes:
+//   ok        written
+//   covered   memory already holds it (a drop)
+//   failed    an operational failure: the item stays queued for next time
+//   neither   refused because the target is gone (a drop)
+// `snapshot` maps the ids the judge saw to the text it judged.
+function applyDecision(home, d, item, snapshot) {
   const liveId = (id) => {
     const hit = findById(home, id);
     return hit && !hit.rel.startsWith('dreams/');
   };
+  // A verdict on older text must not overwrite a newer edit.
+  const changed = (id) => snapshot.has(id) && entryTextById(home, id) !== snapshot.get(id);
+  const stale = (id) => ({ ok: false, failed: true, note: `entry ${id} changed since it was judged` });
+  const result = (r, note) =>
+    r.failed ? { ok: false, failed: true, note: r.text.trim() } : { ok: true, note };
   if (d.decision === 'merge') {
     if (!liveId(d.id)) return { ok: false, note: `entry ${d.id} is gone` };
-    const r = quiet(() => cmdUpdate(d.id, d.text, {}));
-    return r.failed ? { ok: false, note: r.text.trim() } : { ok: true, note: `updated ${d.id}` };
+    if (changed(d.id)) return stale(d.id);
+    return result(quiet(() => cmdUpdate(d.id, d.text, {})), `updated ${d.id}`);
   }
   if (d.decision === 'retire') {
     if (!liveId(d.id)) return { ok: false, note: `entry ${d.id} is gone` };
-    const r = quiet(() => cmdSupersede(d.id));
-    return r.failed ? { ok: false, note: r.text.trim() } : { ok: true, note: `retired ${d.id}` };
+    if (changed(d.id)) return stale(d.id);
+    return result(quiet(() => cmdSupersede(d.id)), `retired ${d.id}`);
   }
   // accept
   const text = d.text || item.text;
   if (isUpdate(item)) {
     const id = updateTarget(item);
     if (!liveId(id)) return { ok: false, note: `entry ${id} is gone` };
-    const r = quiet(() => cmdUpdate(id, text, {}));
-    return r.failed ? { ok: false, note: r.text.trim() } : { ok: true, note: `updated ${id}` };
+    if (changed(id)) return stale(id);
+    return result(quiet(() => cmdUpdate(id, text, {})), `updated ${id}`);
   }
   const flags = {};
-  if (isProjectAdd(item) && item.scope) flags.project = item.scope;
+  if (isProjectAdd(item) && item.scope) {
+    // cmdAdd resolves a project only through its existing file; without it
+    // the save would fail, so keep the item for a later review.
+    if (!fs.existsSync(path.join(home, 'projects', `${item.scope}.md`)))
+      return { ok: false, failed: true, note: `project ${item.scope} has no memory file` };
+    flags.project = item.scope;
+  }
   const kind = addKind(item);
   if (kind) flags.kind = kind;
   const r = quiet(() => cmdAdd(text, flags));
+  if (r.failed) return { ok: false, failed: true, note: r.text.trim() };
   const saved = r.text.match(/saved to (\S+) \[id ([0-9a-f]+)\]/);
   if (saved) return { ok: true, note: `saved ${saved[2]} to ${saved[1]}` };
   // cmdAdd refuses duplicates and near-duplicates: memory already has it.
@@ -252,10 +279,21 @@ function reviewSource(home, judge, items, { apply, archive }) {
       }
       counts.unanswered += batch.length - results.length;
       const shownIds = new Set(memory.map((e) => e.id).filter(Boolean));
+      const snapshot = new Map(memory.filter((e) => e.id).map((e) => [e.id, e.text]));
       for (const { item, decisions } of results) {
         decisions.sort((a, b) => ORDER[a.decision] - ORDER[b.decision]);
+        // A tidy names the entries it merges or retires. If the judge was not
+        // shown one, the proposal is unjudged, not wrong: leave it queued.
+        if (isTidy(item) && decisions.some((d) => d.id && !shownIds.has(d.id))) {
+          counts.unanswered++;
+          out(`  kept     ${item.text.slice(0, 90)} — names entries the judge was not shown`);
+          continue;
+        }
         let anyWrite = false;
         let refusedAll = true;
+        // Set when an operation failed for a reason other than validation:
+        // the item stays queued, and nothing is logged as dropped.
+        let keepQueued = false;
         // A retire is safe only once its merge landed: otherwise the detail
         // it would drop was never copied into the keeper.
         let mergeFailed = false;
@@ -286,7 +324,7 @@ function reviewSource(home, judge, items, { apply, archive }) {
             out(`  drop: ${item.text.slice(0, 110)}${d.reason ? ` — ${d.reason}` : ''}`);
             continue;
           }
-          const r = applyDecision(home, d, item);
+          const r = applyDecision(home, d, item, snapshot);
           if (r.ok) {
             refusedAll = false;
             anyWrite = true;
@@ -302,17 +340,25 @@ function reviewSource(home, judge, items, { apply, archive }) {
           } else {
             if (d.decision === 'merge') mergeFailed = true;
             counts.refused++;
-            out(`  failed   ${label}: ${r.note}`);
+            if (r.failed) {
+              keepQueued = true;
+              out(`  failed   ${label}: ${r.note}`);
+            } else {
+              out(`  refused  ${label}: ${r.note}`);
+            }
           }
+        }
+        if (!apply) continue;
+        if (keepQueued) {
+          counts.unanswered++;
+          continue;
         }
         // An item leaves the queue once it was decided, even when every
         // decision was refused by vetting: the judge saw it, and a refused
         // write would be refused again tomorrow.
-        if (apply) {
-          decidedLines.push(item.line);
-          if (refusedAll && !anyWrite)
-            logRows.push({ decision: 'drop', text: item.text, reason: 'judged decision refused by vetting' });
-        }
+        decidedLines.push(item.line);
+        if (refusedAll && !anyWrite)
+          logRows.push({ decision: 'drop', text: item.text, reason: 'judged decision refused by vetting' });
       }
     }
   }
@@ -341,6 +387,9 @@ export function cmdReviewAuto(flags) {
   const background = !!flags.background;
   if (background && !takeRunLock(home)) return;
   try {
+    // Checked under the lock: a launch that passed the check before an
+    // earlier run finished must not run the judge again.
+    if (background && reviewedToday(home)) return;
     const queue = flags.archive ? [] : readQueue(home);
     const archiveLimit = flags.archive
       ? numFlag(flags.limit, 0)

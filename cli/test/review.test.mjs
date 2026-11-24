@@ -308,8 +308,12 @@ test('dream --if-stale starts a detached review that drains the queue', async ()
   assert.equal(r.status, 0, r.stderr);
   // The review is detached; give it time to finish. A 20s budget was too
   // tight on the slower Windows CI runner (node startup + git commit).
-  for (let i = 0; i < 300 && queueText(home).includes('tracing'); i++)
+  // The child drops queue lines before it writes the log, so wait for the
+  // log row too, not only for the queue to empty.
+  const logPath = path.join(home, 'dreams', 'review-log.md');
+  const logged = () => fs.existsSync(logPath) && /Background proposal about tracing/.test(read(logPath));
+  for (let i = 0; i < 300 && (queueText(home).includes('tracing') || !logged()); i++)
     await new Promise((res) => setTimeout(res, 200));
   assert.ok(!queueText(home).includes('tracing'), queueText(home));
-  assert.match(read(path.join(home, 'dreams', 'review-log.md')), /Background proposal about tracing/);
+  assert.ok(logged(), 'review log never recorded the decision');
 });

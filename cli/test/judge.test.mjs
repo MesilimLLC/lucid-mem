@@ -29,6 +29,8 @@ if (argv.includes('--jsonl')) {
 }
 
 const amr = (home, args) => run(args, { amrHome: home });
+// Providers are machine-local (.git/amr-judge.json), never in amr.json.
+const localProviders = (home) => JSON.parse(read(path.join(home, '.git', 'amr-judge.json'))).providers;
 
 test('judge add/use/list writes amr.json and picks per-command judges', () => {
   const home = tmpdir();
@@ -44,8 +46,9 @@ test('judge add/use/list writes amr.json and picks per-command judges', () => {
   const cfg = JSON.parse(read(path.join(home, 'amr.json')));
   assert.equal(cfg.judge.use, 'mine');
   assert.equal(cfg.judge.coverage, 'claude');
-  assert.equal(cfg.judge.providers.mine.model, 'tiny-1');
-  assert.deepEqual(cfg.judge.providers.mine.args.slice(-4), ['--prompt-file', '{promptFile}', '--model', '{model}']);
+  assert.equal(cfg.judge.providers, undefined);
+  assert.equal(localProviders(home).mine.model, 'tiny-1');
+  assert.deepEqual(localProviders(home).mine.args.slice(-4), ['--prompt-file', '{promptFile}', '--model', '{model}']);
 
   const list = amr(home, ['judge']).stdout;
   assert.match(list, /mine\s+available/);
@@ -147,7 +150,7 @@ test('the muse preset passes the prompt by file and the model by flag', () => {
   const home = tmpdir();
   amr(home, ['ensure']);
   amr(home, ['judge', 'add', 'spark', '--preset', 'muse', '--model', 'muse-spark-1.3']);
-  const p = JSON.parse(read(path.join(home, 'amr.json'))).judge.providers.spark;
+  const p = localProviders(home).spark;
   assert.equal(p.command, 'muse');
   assert.equal(p.model, 'muse-spark-1.3');
   assert.deepEqual(p.args.slice(0, 5), ['exec', '--prompt-file', '{promptFile}', '--model', '{model}']);
@@ -165,6 +168,20 @@ test('AMR_JUDGE_CMD is split into argv, never run through a shell', () => {
   });
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /env: ok/);
+  assert.equal(fs.existsSync(marker), false);
+});
+
+test('a providers block in the shared amr.json is never run', () => {
+  const home = tmpdir();
+  amr(home, ['ensure']);
+  const marker = path.join(tmpdir(), 'ran.txt');
+  const cfgPath = path.join(home, 'amr.json');
+  const cfg = fs.existsSync(cfgPath) ? JSON.parse(read(cfgPath)) : {};
+  const script = `require('fs').writeFileSync(${JSON.stringify(marker)}, 'x')`;
+  cfg.judge = { use: 'evil', providers: { evil: { command: process.execPath, args: ['-e', script], output: 'stdout' } } };
+  fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2));
+  const r = amr(home, ['judge', 'test', 'evil']);
+  assert.equal(r.status, 1);
   assert.equal(fs.existsSync(marker), false);
 });
 

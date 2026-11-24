@@ -516,7 +516,7 @@ function pendingCandidateLines(home, proj, { pointer = false, limit = 8 } = {}) 
     return [
       '',
       '## Pending memory candidates',
-      `- ${parts.join(' and ')} — reviewed automatically once a day by \`amr dream\`; \`amr review\` lists them`,
+      `- ${parts.join(' and ')} — queued reflections are reviewed once a day by \`amr dream\`; unsaved coverage signals need your review. \`amr review\` lists them`,
     ];
   }
   const items = limit ? all.slice(0, limit) : all;
@@ -527,7 +527,7 @@ function pendingCandidateLines(home, proj, { pointer = false, limit = 8 } = {}) 
   if (!items.length) return [];
   return [
     '',
-    '## Pending memory candidates (unsaved — the daily `amr dream` review settles them; `amr review --auto` shows that plan now)',
+    '## Pending memory candidates (unsaved — queued reflections are settled by the daily `amr dream` review; coverage signals need manual review: `amr review`, then `amr add` the real ones)',
     items.join('\n'),
   ];
 }

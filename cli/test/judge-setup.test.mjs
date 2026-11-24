@@ -78,7 +78,15 @@ function withRealLogin(ui) {
   return ui;
 }
 
-const judgeCfg = () => JSON.parse(read(path.join(home, 'amr.json'))).judge || {};
+const localFile = () => path.join(home, '.git', 'amr-judge.json');
+const localProviders = () => {
+  try {
+    return JSON.parse(read(localFile())).providers || {};
+  } catch {
+    return {};
+  }
+};
+const judgeCfg = () => ({ ...(JSON.parse(read(path.join(home, 'amr.json'))).judge || {}), providers: localProviders() });
 
 test('setup signs in through the CLI login when status says signed out, tests, then saves', async () => {
   const fake = fakeCli();
@@ -118,10 +126,9 @@ test('a changed model is tested before it is saved', async () => {
   fs.writeFileSync(fake.token, 'x');
   fake.add('fk4', ['--model', 'small-1']);
   // fake.add put no {model} in args; add one so the model reaches argv.
-  const cfgPath = path.join(home, 'amr.json');
-  const cfg = JSON.parse(read(cfgPath));
-  cfg.judge.providers.fk4.args.push('--model', '{model}');
-  fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2));
+  const cfg = JSON.parse(read(localFile()));
+  cfg.providers.fk4.args.push('--model', '{model}');
+  fs.writeFileSync(localFile(), JSON.stringify(cfg, null, 2));
   const ui = withRealLogin(scriptedUi({ picks: ['fk4', 'triage'], answers: ['small-2'] }));
   assert.equal(await runSetup({ home, ui }), true, ui.logs.join('\n'));
   assert.ok(fake.calls().some((argv) => argv.includes('small-2')));

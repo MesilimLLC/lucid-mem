@@ -170,10 +170,29 @@ export const PRESETS = {
   },
 };
 
+// Provider definitions name commands to run, so they live in
+// .git/amr-judge.json: this machine only, never pushed or pulled by
+// `amr sync`. amr.json (shared) keeps just the choices (judge.use, judge.<purpose>),
+// which name no command, so a synced choice with no local provider falls back.
+const localJudgeFile = (home) => path.join(home, '.git', 'amr-judge.json');
+
+function readLocalProviders(home) {
+  try {
+    const p = JSON.parse(fs.readFileSync(localJudgeFile(home), 'utf8')).providers;
+    return p && typeof p === 'object' ? p : {};
+  } catch {
+    return {};
+  }
+}
+
 export function judgeConfig(home) {
-  const cfg = loadConfig(home || resolveHome());
-  const j = cfg.judge && typeof cfg.judge === 'object' ? cfg.judge : {};
-  return { j, providers: j.providers && typeof j.providers === 'object' ? j.providers : {} };
+  const h = home || resolveHome();
+  const cfg = loadConfig(h);
+  const j = cfg.judge && typeof cfg.judge === 'object' ? { ...cfg.judge } : {};
+  // A providers block in amr.json is ignored: anyone who can push to the
+  // memory repo could otherwise make every synced machine run a command.
+  delete j.providers;
+  return { j, providers: readLocalProviders(h) };
 }
 
 export function providerAvailable(p) {
@@ -342,6 +361,13 @@ export function runJudge(name, prompt, { home, provider } = {}) {
       fs.writeFileSync(promptFile, prompt);
       const args = fillArgs(p, { model: p.model || '', prompt, promptFile, outFile });
       const viaArg = (p.args || []).some((a) => /\{prompt(File)?\}/.test(String(a)));
+      // cmd.exe reads %VAR% and & | > inside a command line, and the prompt
+      // carries transcript text. Only the file or stdin route is safe there.
+      const inlinePrompt = (p.args || []).some((a) => /\{prompt\}/.test(String(a)));
+      if (/\.(cmd|bat)$/i.test(bin) && inlinePrompt) {
+        lastJudgeError = 'a .cmd/.bat judge cannot take {prompt} inline; use {promptFile} or stdin';
+        return null;
+      }
       r = spawnJudge(bin, args, viaArg ? opts : { ...opts, input: prompt });
     } else if (name === 'env') {
       // No shell: the value is split into argv like a --cmd provider, so
@@ -416,11 +442,14 @@ export function checkAuth({ command, status }) {
   const ok = status.ok || 'exit0';
   if (ok === 'exit0') return r.status === 0;
   if (ok.startsWith('json:')) {
+    // Unparseable or missing: unknown, so the probe decides.
+    let v;
     try {
-      return !!dig(JSON.parse(r.stdout), ok.slice(5));
+      v = dig(JSON.parse(r.stdout), ok.slice(5));
     } catch {
-      return false;
+      return null;
     }
+    return v === undefined ? null : !!v;
   }
   return null;
 }
@@ -443,14 +472,23 @@ export function runLogin({ command, login }) {
 const out = (s = '') => process.stdout.write(s + '\n');
 const err = (s) => process.stderr.write(s + '\n');
 
+// Applies `mutate` to the judge settings, then splits the result: providers
+// go to the local file, choices to amr.json (committed when they change).
 export function writeJudgeConfig(home, mutate, msg) {
   const cfg = loadConfig(home);
-  const j = cfg.judge && typeof cfg.judge === 'object' ? cfg.judge : {};
-  if (!j.providers || typeof j.providers !== 'object') j.providers = {};
-  mutate(j);
-  if (!Object.keys(j.providers).length) delete j.providers;
-  if (Object.keys(j).length) cfg.judge = j;
+  const before = JSON.stringify(cfg.judge ?? null);
+  const work = cfg.judge && typeof cfg.judge === 'object' ? { ...cfg.judge } : {};
+  delete work.providers;
+  work.providers = readLocalProviders(home);
+  mutate(work);
+  const providers = work.providers || {};
+  delete work.providers;
+  const file = localJudgeFile(home);
+  if (Object.keys(providers).length) fs.writeFileSync(file, JSON.stringify({ providers }, null, 2) + '\n');
+  else fs.rmSync(file, { force: true });
+  if (Object.keys(work).length) cfg.judge = work;
   else delete cfg.judge;
+  if (JSON.stringify(cfg.judge ?? null) === before) return;
   saveConfig(home, cfg);
   commit(home, ['amr.json'], msg);
 }

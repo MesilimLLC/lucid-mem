@@ -450,7 +450,7 @@ function rememberHits(home, hits) {
 }
 
 const HOOK_HEADER =
-  'Possibly relevant memory (matched on this tool failure by keyword, so it may not apply; run `amr unhelpful <id>` if it is noise):';
+  'Possibly relevant memory (matched on this tool failure by keyword, so it may not apply; run `lucid unhelpful <id>` if it is noise):';
 
 export function cmdRecall(text, flags) {
   const home = ensureRepo();

@@ -152,7 +152,7 @@ export function mergeProposals(home, rel, now = Date.now(), max = MAX_PROPOSALS)
       if (!nearlySameSets(a.w, b.w)) continue;
       const [keep, drop] = a.s >= b.s ? [a, b] : [b, a];
       proposals.push(
-        `merge ${drop.id} into ${keep.id} (near-duplicate): fold any unique detail into ${keep.id}, then \`amr delete ${drop.id}\``
+        `merge ${drop.id} into ${keep.id} (near-duplicate): fold any unique detail into ${keep.id}, then \`lucid delete ${drop.id}\``
       );
       paired.add(a.i);
       paired.add(b.i);
@@ -172,10 +172,10 @@ export function consolidationProposals(home, rel, budget, now = Date.now()) {
   for (const { l, i, id } of scored) {
     if (proposals.length >= MAX_PROPOSALS || paired.has(i) || !id) continue;
     if (isExpired(l))
-      proposals.push(`expired entry ${id}: \`amr delete ${id}\``);
+      proposals.push(`expired entry ${id}: \`lucid delete ${id}\``);
     else if (entryKind(l) !== 'state' && episodicHits(l).length)
       proposals.push(
-        `session-state-looking entry ${id}: \`amr delete ${id}\` or re-save as --kind state`
+        `session-state-looking entry ${id}: \`lucid delete ${id}\` or re-save as --kind state`
       );
   }
   return proposals;

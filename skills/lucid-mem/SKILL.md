@@ -9,7 +9,7 @@ Keep the user's memory in a git repo that follows the [Agent Memory Repo spec](h
 
 ## Autonomous mode (Agent Memory Harness)
 
-If the `amr` CLI is on this machine (`amr doctor`, or `node <path>/cli/amr.mjs` if not on PATH), the harness already handles memory: session-start hooks inject `amr context` output, and the agent saves durable facts unprompted with `amr add`. In that case this skill is the manual fallback — use it only when the harness is absent or its repo isn't the one the user means. Prefer `amr` commands (`context`, `add`, `update`, `search`, `sync`) over the raw git procedures below; they enforce the same spec plus dedup, secret refusal, locking, and index maintenance.
+If the `lucid` CLI is on this machine (`lucid doctor`, or `node <path>/cli/amr.mjs` if not on PATH), the harness already handles memory: session-start hooks inject `lucid context` output, and the agent saves durable facts unprompted with `lucid add`. In that case this skill is the manual fallback — use it only when the harness is absent or its repo isn't the one the user means. Prefer `lucid` commands (`context`, `add`, `update`, `search`, `sync`) over the raw git procedures below; they enforce the same spec plus dedup, secret refusal, locking, and index maintenance.
 
 ## Ground rules
 

@@ -27,13 +27,13 @@ const SIMILAR = 0.8;
 const HEADER = [
   '# Pending reflections',
   '',
-  'Background-judge proposals, unsaved. Review: `amr add` / `amr update <id>` the real ones; ignore the rest.',
+  'Background-judge proposals, unsaved. Review: `lucid add` / `lucid update <id>` the real ones; ignore the rest.',
   '',
 ];
 const ARCHIVE_HEADER = [
   '# Archived reflections',
   '',
-  'Proposals the pending queue evicted (overflow past 15 items, or older than a fortnight) before any session reviewed them. Rescue the real ones with `amr add` / `amr update <id>`, then delete the line.',
+  'Proposals the pending queue evicted (overflow past 15 items, or older than a fortnight) before any session reviewed them. Rescue the real ones with `lucid add` / `lucid update <id>`, then delete the line.',
   '',
 ];
 
@@ -302,7 +302,7 @@ export function logReviewDecisions(home, rows, now = today()) {
       [
         '# Review log',
         '',
-        `Decisions \`amr review --auto\` made on queued proposals. Dropped items are not proposed again for ${REVIEW_LOG_DAYS} days.`,
+        `Decisions \`lucid review --auto\` made on queued proposals. Dropped items are not proposed again for ${REVIEW_LOG_DAYS} days.`,
         '',
         ...kept,
       ].join('\n') + '\n'

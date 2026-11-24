@@ -32,12 +32,13 @@ import { cmdReviewAuto } from './review.mjs';
 import { cmdJudge } from './judge.mjs';
 import { cmdJudgeSetup } from './judge-setup.mjs';
 
-const USAGE = `amr: agent memory CLI (lucid-mem)
+const USAGE = `lucid: agent memory CLI (lucid-mem)
 
-usage: amr <command> [args] [flags]
+usage: lucid <command> [args] [flags]
+\`amr\` is an alias: both names run the same CLI and share state.
 
   ensure                        create/verify the memory repo ($AMR_HOME, default ~/agent-memory)
-  context [dir] [--budget N]    ranked session digest (default 6000 chars; --full ignores): project-scoped inside a known repo; global + pooled projects outside; --hook (Claude SessionStart) sends only new entries on compaction/resume re-injections and points at "amr review" instead of listing candidates; --hermes (Hermes shell hooks) injects once per session via pre_llm_call, re-arms on post_compaction
+  context [dir] [--budget N]    ranked session digest (default 6000 chars; --full ignores): project-scoped inside a known repo; global + pooled projects outside; --hook (Claude SessionStart) sends only new entries on compaction/resume re-injections and points at "lucid review" instead of listing candidates; --hermes (Hermes shell hooks) injects once per session via pre_llm_call, re-arms on post_compaction
   recall ["<error text>"]       surface memory possibly relevant to a tool failure (PostToolUseFailure hook reads the payload on stdin with --hook); acts only on real failures, only this project's entries, silent when nothing matches
   unhelpful <id...> ["<error>"] mute a recalled entry for that kind of error (learns from the last recall, or from the error text given)
   add "text"                    save a memory entry
@@ -70,7 +71,7 @@ usage: amr <command> [args] [flags]
   judge remove <name>  |  judge test [name]   delete a provider  |  send a tiny prompt and check the reply
   reflect                       Stop hook: gated, saves learnings via a background judge (AMR_REFLECT=block prompts in-session)
   install [--host a,b|all]      wire hooks + rules + MCP into detected agent hosts
-  uninstall [--host a,b|all]    remove amr hooks + rules + MCP entries
+  uninstall [--host a,b|all]    remove lucid hooks + rules + MCP entries
   serve                         stdio MCP server (memory_context/add/search/update)
 
 flags:
@@ -139,7 +140,7 @@ function spaceFormProject(rest, flags, pos) {
 // The USAGE lines for one command, or all of USAGE when none match.
 function printCommandHelp(cmd) {
   const lines = USAGE.split('\n').filter((l) => l.startsWith(`  ${cmd} `) || l === `  ${cmd}`);
-  process.stdout.write(lines.length ? `usage: amr ${cmd} ...\n${lines.join('\n')}\n` : USAGE);
+  process.stdout.write(lines.length ? `usage: lucid ${cmd} ...\n${lines.join('\n')}\n` : USAGE);
   return 0;
 }
 
@@ -167,7 +168,7 @@ export function main(argv) {
       case 'add': {
         const text = pos.join(' ');
         if (!text.trim()) {
-          process.stderr.write('usage: amr add "text"\n');
+          process.stderr.write('usage: lucid add "text"\n');
           process.exitCode = 1;
           return;
         }
@@ -177,7 +178,7 @@ export function main(argv) {
         const [match, ...t] = pos;
         const text = t.join(' ');
         if (!match || !text.trim()) {
-          process.stderr.write('usage: amr update "match" "new text"\n');
+          process.stderr.write('usage: lucid update "match" "new text"\n');
           process.exitCode = 1;
           return;
         }
@@ -188,7 +189,7 @@ export function main(argv) {
       case 'unhelpful': {
         const ids = pos.filter((p) => /^[0-9a-f]{4,8}$/.test(p));
         if (!ids.length) {
-          process.stderr.write('usage: amr unhelpful <id...> ["error text"]\n');
+          process.stderr.write('usage: lucid unhelpful <id...> ["error text"]\n');
           process.exitCode = 1;
           return;
         }
@@ -197,7 +198,7 @@ export function main(argv) {
       case 'search': {
         const term = pos.join(' ');
         if (!term.trim()) {
-          process.stderr.write('usage: amr search "term"\n');
+          process.stderr.write('usage: lucid search "term"\n');
           process.exitCode = 1;
           return;
         }
@@ -243,7 +244,7 @@ export function main(argv) {
         return cmdIds();
       case 'supersede':
         if (!pos[0]) {
-          process.stderr.write('usage: amr supersede <id> ["replacement text"]\n');
+          process.stderr.write('usage: lucid supersede <id> ["replacement text"]\n');
           process.exitCode = 1;
           return;
         }
@@ -251,7 +252,7 @@ export function main(argv) {
       case 'delete':
       case 'rm':
         if (!pos[0]) {
-          process.stderr.write('usage: amr delete <id>\n');
+          process.stderr.write('usage: lucid delete <id>\n');
           process.exitCode = 1;
           return;
         }
@@ -271,7 +272,7 @@ export function main(argv) {
             'utf8'
           )
         );
-        return process.stdout.write(`amr ${pkg.version}\n`);
+        return process.stdout.write(`lucid ${pkg.version}\n`);
       }
       case 'help':
       case '--help':
@@ -283,7 +284,7 @@ export function main(argv) {
         process.exitCode = 1;
     }
   } catch (e) {
-    process.stderr.write(`amr: ${e.message}\n`);
+    process.stderr.write(`lucid: ${e.message}\n`);
     process.exitCode = 1;
   }
 }

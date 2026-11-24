@@ -11,7 +11,7 @@ const seeded = () => {
   assert.equal(run(['ensure'], { amrHome: home }).status, 0);
   return home;
 };
-// Whole days between the UTC date stamps amr writes (not wall-clock time).
+// Whole days between the UTC date stamps lucid writes (not wall-clock time).
 const daysFromNow = (iso) =>
   Math.round((Date.parse(iso) - Date.parse(new Date().toISOString().slice(0, 10))) / 864e5);
 const expiresOf = (text) => text.match(/expires: (\d{4}-\d{2}-\d{2})/)?.[1];
@@ -63,13 +63,13 @@ test('--verify is stored escaped, shown with the entry in context, and never run
   assert.match(read(path.join(home, 'MEMORY.md')), /Cloudflare Pages[^\n]*verify: curl/);
 });
 
-test('amr add finds a similar entry in another file and offers supersede instead of piling up', () => {
+test('lucid add finds a similar entry in another file and offers supersede instead of piling up', () => {
   const home = seeded();
   assert.equal(run(['add', CP_ONE, '--kind', 'pitfall'], { amrHome: home }).status, 0);
   const r = run(['add', CP_TWO, '--kind', 'pitfall', '--file', 'pitfalls'], { amrHome: home });
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /similar to \[id [0-9a-f]{4}\]/);
-  assert.match(r.stdout, /amr supersede [0-9a-f]{4}/);
+  assert.match(r.stdout, /lucid supersede [0-9a-f]{4}/);
   assert.ok(!fs.existsSync(path.join(home, 'pitfalls.md')), 'near-copy must not be saved');
   const forced = run(['add', CP_TWO, '--kind', 'pitfall', '--file', 'pitfalls', '--new'], { amrHome: home });
   assert.match(forced.stdout, /saved to pitfalls\.md/);

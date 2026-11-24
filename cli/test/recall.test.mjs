@@ -120,7 +120,7 @@ test('PostToolUseFailure fires, echoes its event name, and the header is honest'
   assert.equal(out.hookEventName, 'PostToolUseFailure');
   assert.match(out.additionalContext, /^Possibly relevant/);
   assert.doesNotMatch(out.additionalContext, /Relevant memory for this error/);
-  assert.match(out.additionalContext, /amr unhelpful/);
+  assert.match(out.additionalContext, /lucid unhelpful/);
 });
 
 test('a project entry fires only inside its own project', () => {
@@ -175,7 +175,7 @@ test('near-duplicate hits collapse to one', () => {
   assert.ok(!(/em dashes and ellipses/.test(r.stdout) && /ellipses, and backslash/.test(r.stdout)));
 });
 
-test('amr unhelpful mutes an entry for that kind of error only', () => {
+test('lucid unhelpful mutes an entry for that kind of error only', () => {
   const home = tmpdir();
   const id = seed(home);
   const first = hook(home, {
@@ -250,7 +250,7 @@ test('a failure with no extractable text stays silent', () => {
   assert.equal(r.stdout.trim(), '');
 });
 
-test('amr unhelpful accepts an entry that just expired, and a wildcard mute is not stacked', () => {
+test('lucid unhelpful accepts an entry that just expired, and a wildcard mute is not stacked', () => {
   const home = tmpdir();
   run(['ensure'], { amrHome: home });
   fs.writeFileSync(

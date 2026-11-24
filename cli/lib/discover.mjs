@@ -230,7 +230,7 @@ export function cmdDiscover(flags) {
     const hint =
       r.memory === 'seeded'
         ? ''
-        : '   <- cd here; amr add "<identity>" --project';
+        : '   <- cd here; lucid add "<identity>" --project';
     out(
       `  ${String(r.hits).padStart(4)}  ${r.base.padEnd(24)} ${tag}  ${r.remote}${hint}`
     );
@@ -242,7 +242,7 @@ export function cmdDiscover(flags) {
     out(`  ${s.a} <-> ${s.b}   (${s.why})`);
   out('');
   out(
-    'seed:   cd <repo> && amr add "<one-line identity>" --project   (run inside the repo so the slug matches)'
+    'seed:   cd <repo> && lucid add "<one-line identity>" --project   (run inside the repo so the slug matches)'
   );
-  out('link:   cd <repo> && amr link <sibling> [more...]');
+  out('link:   cd <repo> && lucid link <sibling> [more...]');
 }

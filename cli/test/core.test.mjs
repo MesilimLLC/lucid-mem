@@ -57,7 +57,7 @@ test('add skips near-duplicates', () => {
   );
 });
 
-test('add warns on a near-duplicate and points at `amr update <id>` instead of saving a copy', () => {
+test('add warns on a near-duplicate and points at `lucid update <id>` instead of saving a copy', () => {
   const home = tmpdir();
   run(['ensure'], { amrHome: home });
   const a = run(['add', 'When editing source files from Python on Windows, open with encoding utf-8, because the default cp1252 corrupts em dashes'], { amrHome: home });
@@ -66,7 +66,7 @@ test('add warns on a near-duplicate and points at `amr update <id>` instead of s
   const r = run(['add', 'When editing source files from Python on Windows, open files with encoding utf-8 because default cp1252 corrupts em dashes and ellipses'], { amrHome: home });
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout + r.stderr, new RegExp(`near-duplicate of .*${id}`));
-  assert.match(r.stdout + r.stderr, new RegExp(`amr update ${id}`));
+  assert.match(r.stdout + r.stderr, new RegExp(`lucid update ${id}`));
   assert.equal(
     entries(path.join(home, 'MEMORY.md')).filter((l) => l.includes('cp1252')).length,
     1

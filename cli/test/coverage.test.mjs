@@ -149,7 +149,7 @@ test('reflect stays quiet without real work, blocks once after it, then rate-lim
   const t = workTranscript(fakeHome, 7);
   const j = JSON.parse(hook({ session_id: sid, transcript_path: t }).stdout);
   assert.equal(j.decision, 'block');
-  assert.match(j.reason, /amr add/);
+  assert.match(j.reason, /lucid add/);
   assert.equal(hook({ session_id: sid, transcript_path: t }).stdout, '');
   assert.equal(
     hook({ session_id: sid, stop_hook_active: true, transcript_path: t }).stdout,

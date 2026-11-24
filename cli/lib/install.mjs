@@ -1009,7 +1009,7 @@ export function cmdInstall(flags) {
     err(`install incomplete for: ${failed.join(', ')}`);
     process.exitCode = 1;
   }
-  out('verify with: amr doctor');
+  out('verify with: lucid doctor');
 }
 
 // ---------- uninstall ----------
@@ -1196,7 +1196,7 @@ function hostWired(name) {
 export function cmdDoctor() {
   const homeDir = resolveHome();
   const okRepo = fs.existsSync(homeDir) && isMemoryRepo(homeDir);
-  out(`memory repo : ${okRepo ? homeDir : 'MISSING (run: amr ensure)'}`);
+  out(`memory repo : ${okRepo ? homeDir : 'MISSING (run: lucid ensure)'}`);
   if (okRepo) {
     const dirty = git(homeDir, ['status', '--porcelain']);
     out(`worktree    : ${dirty.stdout ? 'DIRTY — uncommitted changes present' : 'clean'}`);
@@ -1235,7 +1235,7 @@ export function cmdDoctor() {
       out(`peers       : ${missingPeers.map((p) => p.name).join(', ')} configured but not cloned`);
   }
   const onPath =
-    sh('where', ['amr']).code === 0 || sh('which', ['amr']).code === 0;
-  out(`amr on PATH : ${onPath ? 'yes' : `no — hooks still work via: node "${CLI_ENTRY}"`}`);
+    ['lucid', 'amr'].some((n) => sh('where', [n]).code === 0 || sh('which', [n]).code === 0);
+  out(`lucid on PATH : ${onPath ? 'yes' : `no — hooks still work via: node "${CLI_ENTRY}"`}`);
   for (const name of Object.keys(HOSTS)) out(`${name.padEnd(11)}: ${hostWired(name)}`);
 }

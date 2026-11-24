@@ -231,7 +231,7 @@ function touchDream(home) {
 
 function spinDemo() {
   if (!process.stderr.isTTY)
-    return out('run `amr dream --spin` in a real terminal to see the moons');
+    return out('run `lucid dream --spin` in a real terminal to see the moons');
   spinStart(true);
   setTimeout(() => {
     spinStop();
@@ -519,7 +519,7 @@ export function cmdDream(flags) {
     if (!flags.fix && !flags.compact) {
       touchDream(home);
       out('');
-      out('run `amr dream --fix` for mechanical cleanup (index, dead links, exact dups); add --compact to archive entries beyond the digest cap. Semantic merging needs an agent — see dreams/DREAMER.md');
+      out('run `lucid dream --fix` for mechanical cleanup (index, dead links, exact dups); add --compact to archive entries beyond the digest cap. Semantic merging needs an agent — see dreams/DREAMER.md');
       return;
     }
 

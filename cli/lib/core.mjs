@@ -217,7 +217,7 @@ export function withLock(repo, fn, { retries = 15, retryMs = 200 } = {}) {
   // interleave writes and commits. Callers surface this as an error.
   if (!acquired)
     throw new Error(
-      `could not acquire lock ${lock} after ${Math.round((retries * retryMs) / 1000)}s; another amr process may be writing — retry shortly`
+      `could not acquire lock ${lock} after ${Math.round((retries * retryMs) / 1000)}s; another lucid process may be writing — retry shortly`
     );
   try {
     return fn();
@@ -247,7 +247,7 @@ export function commit(repo, files, msg) {
   }
   const r = git(repo, ['commit', '-m', msg]);
   if (unstaged.length)
-    process.stderr.write(`amr: could not stage ${unstaged.join(', ')}; left uncommitted\n`);
+    process.stderr.write(`lucid: could not stage ${unstaged.join(', ')}; left uncommitted\n`);
   return r.code === 0 && !unstaged.length;
 }
 

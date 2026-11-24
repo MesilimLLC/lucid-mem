@@ -247,7 +247,7 @@ export async function cmdJudgeSetup() {
     const home = ensureRepo();
     if (!process.stdin.isTTY || !process.stdout.isTTY) {
       process.stderr.write(
-        'amr judge setup needs an interactive terminal. Run it in your own terminal, or use `amr judge add`, `amr judge use` and `amr judge test`.\n\n'
+        'lucid judge setup needs an interactive terminal. Run it in your own terminal, or use `lucid judge add`, `lucid judge use` and `lucid judge test`.\n\n'
       );
       listJudges(home);
       process.exitCode = 1;
@@ -255,7 +255,7 @@ export async function cmdJudgeSetup() {
     }
     if (!(await runSetup({ home, ui: terminalUi() }))) process.exitCode = 1;
   } catch (e) {
-    process.stderr.write(`amr: ${e.message}\n`);
+    process.stderr.write(`lucid: ${e.message}\n`);
     process.exitCode = 1;
   }
 }

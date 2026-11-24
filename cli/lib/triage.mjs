@@ -138,7 +138,7 @@ function plan(home, flags) {
   const { found, missingIds } = triageCandidates(home);
   const limit = numFlag(flags.limit, found.length);
   const todo = found.slice(0, limit);
-  if (missingIds) err(`${missingIds} candidate(s) have no id; run \`amr dream --fix\` first`);
+  if (missingIds) err(`${missingIds} candidate(s) have no id; run \`lucid dream --fix\` first`);
   if (!todo.length) return out('triage: no untyped session-state-looking entries');
   const items = [];
   for (let i = 0; i < todo.length; i += BATCH) {
@@ -159,7 +159,7 @@ function plan(home, flags) {
     const after = x.action === 'rewrite' ? `\n      => ${x.text}` : '';
     out(`  ${x.action.padEnd(7)} ${x.id} ${x.kind || ''} ${x.original.slice(0, 110)}${after}`);
   }
-  out(`review ${TRIAGE_PLAN.replace(/\\/g, '/')} (edit or delete items), then: amr dream --triage --apply`);
+  out(`review ${TRIAGE_PLAN.replace(/\\/g, '/')} (edit or delete items), then: lucid dream --triage --apply`);
 }
 
 const withKind = (line, kind) =>
@@ -170,7 +170,7 @@ const withKind = (line, kind) =>
 function apply(home) {
   const abs = path.join(home, TRIAGE_PLAN);
   if (!fs.existsSync(abs)) {
-    err('no triage plan; run `amr dream --triage` first');
+    err('no triage plan; run `lucid dream --triage` first');
     process.exitCode = 1;
     return;
   }

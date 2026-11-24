@@ -118,7 +118,7 @@ test('outside context pools latest project entries; private and noglobal exclude
   assert.ok(!r.stdout.includes('pd quiet fact'));
 });
 
-test('context ranks by kind/recency within a budget; `amr used` boosts entries, search does not', () => {
+test('context ranks by kind/recency within a budget; `lucid used` boosts entries, search does not', () => {
   const home = tmpdir();
   const run0 = (args) => run(args, { amrHome: home });
   run0(['ensure']);
@@ -247,7 +247,7 @@ test('context --hook: pending candidates collapse to a pointer; review and plain
   );
   const payload = JSON.stringify({ session_id: 'sess-p', source: 'startup', cwd: tmpdir() });
   const hook = run(['context', '--hook'], { amrHome: home, cwd: tmpdir(), input: payload }).stdout;
-  assert.match(hook, /## Pending memory candidates\n- 2 unsaved candidate\(s\) — queued reflections are reviewed once a day by `amr dream`; unsaved coverage signals need your review. `amr review` lists them/);
+  assert.match(hook, /## Pending memory candidates\n- 2 unsaved candidate\(s\) — queued reflections are reviewed once a day by `lucid dream`; unsaved coverage signals need your review. `lucid review` lists them/);
   assert.ok(!hook.includes('cache TTL'), hook);
 
   const plain = run(['context'], { amrHome: home, cwd: tmpdir() }).stdout;
@@ -259,7 +259,7 @@ test('context --hook: pending candidates collapse to a pointer; review and plain
   assert.match(review.stdout, /deploys need a green canary/);
 });
 
-test('amr review with an empty queue says so', () => {
+test('lucid review with an empty queue says so', () => {
   const home = tmpdir();
   run(['ensure'], { amrHome: home });
   const review = run(['review'], { amrHome: home, cwd: tmpdir() });

@@ -86,7 +86,11 @@ const localProviders = () => {
     return {};
   }
 };
-const judgeCfg = () => ({ ...(JSON.parse(read(path.join(home, 'amr.json'))).judge || {}), providers: localProviders() });
+const judgeCfg = () => {
+  const amrJson = path.join(home, 'amr.json');
+  const shared = fs.existsSync(amrJson) ? JSON.parse(read(amrJson)).judge || {} : {};
+  return { ...shared, providers: localProviders() };
+};
 
 test('setup signs in through the CLI login when status says signed out, tests, then saves', async () => {
   const fake = fakeCli();

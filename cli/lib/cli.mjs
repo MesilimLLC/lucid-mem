@@ -30,6 +30,7 @@ import { cmdServe } from './serve.mjs';
 import { cmdRecall, cmdUnhelpful } from './recall.mjs';
 import { cmdReviewAuto } from './review.mjs';
 import { cmdJudge } from './judge.mjs';
+import { cmdJudgeSetup } from './judge-setup.mjs';
 
 const USAGE = `amr: agent memory CLI (lucid-mem)
 
@@ -62,8 +63,9 @@ usage: amr <command> [args] [flags]
   discover [--days N] [--min N] [--json]   rank repos by transcript mentions; shows memory coverage + suggested links
   coverage [--days N] [--json] [--no-log] [--judge [name]]  save-rate metric: durable transcript signals vs memory repo
   judge [list]                  judge models: built-ins (claude, codex, env), configured providers, and which one each command uses
+  judge setup                   interactive: pick a judge, sign in to its CLI if needed (runs the CLI's own login), test it, then save it
   judge add <name> --preset muse|claude|codex [--model m]   add a provider from a preset (e.g. --preset muse --model muse-spark-1.3)
-  judge add <name> --cmd "<command and args>" [--model m] [--output stdout|file|claude-json|json:<path>]   any headless CLI; args may use {model} {prompt} {promptFile} {outFile}, else the prompt goes on stdin
+  judge add <name> --cmd "<command and args>" [--model m] [--output stdout|file|claude-json|json:<path>]   any headless CLI; args may use {model} {prompt} {promptFile} {outFile}, else the prompt goes on stdin; --login "<args>" and --status "<args>" tell setup how to sign in
   judge use <name|auto> [--for review|reflect|coverage|triage]   pick the judge for every command, or one
   judge remove <name>  |  judge test [name]   delete a provider  |  send a tiny prompt and check the reply
   reflect                       Stop hook: gated, saves learnings via a background judge (AMR_REFLECT=block prompts in-session)
@@ -220,6 +222,7 @@ export function main(argv) {
       case 'reflect':
         return cmdReflect();
       case 'judge':
+        if (pos[0] === 'setup') return cmdJudgeSetup();
         return cmdJudge(pos, flags);
       case 'review':
         if (flags.auto) return cmdReviewAuto(flags);

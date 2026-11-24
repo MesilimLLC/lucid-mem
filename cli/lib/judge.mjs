@@ -103,7 +103,9 @@ const BACKENDS = {
 //         "args": ["exec", "--prompt-file", "{promptFile}", "--model", "{model}", ...],
 //         "model": "muse-spark-1.3",
 //         "output": "stdout",           // stdout | file | claude-json | json:<dotted.path>
-//         "timeoutSec": 300
+//         "timeoutSec": 300,
+//         "status": { "args": [...], "ok": "exit0" | "json:<path>" },  // optional
+//         "login": ["login"]            // optional, for `amr judge setup`
 //       }
 //     }
 //   }
@@ -136,12 +138,16 @@ export const PRESETS = {
       '--no-foreign-personal-context',
     ],
     output: 'stdout',
+    // No status command: `amr judge setup` finds out with a test prompt.
+    login: ['login'],
   },
   claude: {
     command: 'claude',
     model: 'haiku',
     args: BACKENDS.claude.args().map((a) => (a === 'haiku' ? '{model}' : a)),
     output: 'claude-json',
+    status: { args: ['auth', 'status'], ok: 'json:loggedIn' },
+    login: ['auth', 'login'],
   },
   codex: {
     command: 'codex',
@@ -159,20 +165,22 @@ export const PRESETS = {
     ],
     modelFlag: ['-m', '{model}'],
     output: 'file',
+    status: { args: ['login', 'status'], ok: 'exit0' },
+    login: ['login'],
   },
 };
 
-function judgeConfig(home) {
+export function judgeConfig(home) {
   const cfg = loadConfig(home || resolveHome());
   const j = cfg.judge && typeof cfg.judge === 'object' ? cfg.judge : {};
   return { j, providers: j.providers && typeof j.providers === 'object' ? j.providers : {} };
 }
 
-function providerAvailable(p) {
+export function providerAvailable(p) {
   return !!(p && typeof p.command === 'string' && p.command.trim() && findBin(p.command.trim()));
 }
 
-function available(name, providers) {
+export function available(name, providers) {
   if (Object.hasOwn(providers, name)) return providerAvailable(providers[name]);
   if (name === 'env') return !!process.env.AMR_JUDGE_CMD;
   if (Object.hasOwn(BACKENDS, name)) return !!findBin(BACKENDS[name].bin);
@@ -194,7 +202,7 @@ export function resolveJudge(which, { purpose, home } = {}) {
   return null;
 }
 
-function findBin(name) {
+export function findBin(name) {
   if (path.isAbsolute(name)) return fs.existsSync(name) ? name : null;
   const tool = process.platform === 'win32' ? 'where' : 'which';
   const r = spawnSync(tool, [name], { encoding: 'utf8', timeout: 5000 });
@@ -292,10 +300,12 @@ const errorTail = (r) =>
 // Returns the judge's raw reply text, or null on any failure. Callers
 // fall back to their deterministic result — judging must never break a
 // run.
-export function runJudge(name, prompt, { home } = {}) {
+// `provider` runs an unsaved definition under `name` (judge setup tests
+// a choice before writing it).
+export function runJudge(name, prompt, { home, provider } = {}) {
   lastJudgeError = '';
   const { providers } = judgeConfig(home);
-  const p = Object.hasOwn(providers, name) ? providers[name] : null;
+  const p = provider || (Object.hasOwn(providers, name) ? providers[name] : null);
   const b = p ? null : BACKENDS[name];
   if (!p && !b) return null;
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'amr-judge-'));
@@ -349,12 +359,74 @@ export function runJudge(name, prompt, { home } = {}) {
   }
 }
 
+// ---- probe, sign-in state, login ------------------------------------------
+
+export const PROBE_PROMPT = 'Reply with ONLY this JSON array and nothing else: [{"ok":true}]';
+
+// Send the tiny probe prompt; ok only for the exact expected reply.
+export function probeJudge(name, { home, provider } = {}) {
+  const t0 = Date.now();
+  const reply = runJudge(name, PROBE_PROMPT, { home, provider });
+  const secs = ((Date.now() - t0) / 1000).toFixed(1);
+  let ok = false;
+  try {
+    ok = JSON.parse((String(reply || '').match(/\[[\s\S]*\]/) || ['null'])[0])?.[0]?.ok === true;
+  } catch {}
+  return { ok, secs, error: ok ? '' : reply ? reply.slice(0, 200) : lastJudgeError };
+}
+
+// How to check and fix sign-in for a judge: a configured provider's own
+// status/login, or the matching preset's for the claude/codex built-ins.
+export function authSpec(name, provider) {
+  const src = provider || (Object.hasOwn(BACKENDS, name) ? PRESETS[name] : null);
+  if (!src) return { command: null };
+  return { command: src.command, status: src.status, login: src.login };
+}
+
+// true / false from the CLI's own status command; null when there is
+// none or it could not run (the probe decides then).
+export function checkAuth({ command, status }) {
+  if (!command || !Array.isArray(status?.args)) return null;
+  const bin = findBin(command.trim());
+  if (!bin) return false;
+  const r = spawnJudge(bin, status.args.map(String), {
+    encoding: 'utf8',
+    timeout: 20_000,
+    cwd: os.tmpdir(),
+    env: { ...process.env, AMR_NO_JUDGE: '1', AMR_HOOKS_OFF: '1' },
+  });
+  if (!r || r.error) return null;
+  const ok = status.ok || 'exit0';
+  if (ok === 'exit0') return r.status === 0;
+  if (ok.startsWith('json:')) {
+    try {
+      return !!dig(JSON.parse(r.stdout), ok.slice(5));
+    } catch {
+      return false;
+    }
+  }
+  return null;
+}
+
+// Run the CLI's own login on the user's terminal. amr never sees the
+// credentials: the CLI does its browser or device-code flow itself.
+export function runLogin({ command, login }) {
+  if (!command || !Array.isArray(login)) return 1;
+  const bin = findBin(command.trim());
+  if (!bin) return 1;
+  const r = spawnJudge(bin, login.map(String), {
+    stdio: 'inherit',
+    env: { ...process.env, AMR_HOOKS_OFF: '1' },
+  });
+  return r?.status ?? 1;
+}
+
 // ---- `amr judge` ----------------------------------------------------------
 
 const out = (s = '') => process.stdout.write(s + '\n');
 const err = (s) => process.stderr.write(s + '\n');
 
-function writeJudgeConfig(home, mutate, msg) {
+export function writeJudgeConfig(home, mutate, msg) {
   const cfg = loadConfig(home);
   const j = cfg.judge && typeof cfg.judge === 'object' ? cfg.judge : {};
   if (!j.providers || typeof j.providers !== 'object') j.providers = {};
@@ -366,7 +438,7 @@ function writeJudgeConfig(home, mutate, msg) {
   commit(home, ['amr.json'], msg);
 }
 
-function splitCommand(s) {
+export function splitCommand(s) {
   const parts = [];
   const re = /"([^"]*)"|'([^']*)'|(\S+)/g;
   let m;
@@ -374,7 +446,7 @@ function splitCommand(s) {
   return parts;
 }
 
-function listJudges(home) {
+export function listJudges(home) {
   const { j, providers } = judgeConfig(home);
   out('Built-in:');
   for (const name of ['claude', 'codex', 'env'])
@@ -399,6 +471,7 @@ function listJudges(home) {
 }
 
 // amr judge [list]
+// amr judge setup                (interactive picker; judge-setup.mjs)
 // amr judge add <name> (--preset muse|claude|codex | --cmd "<command and args>") [--model m] [--output kind] [--timeout s]
 // amr judge use <name|auto> [--for review|reflect|coverage|triage]
 // amr judge remove <name>
@@ -428,6 +501,10 @@ export function cmdJudge(pos, flags) {
     if (typeof flags.model === 'string') p.model = flags.model;
     if (typeof flags.output === 'string') p.output = flags.output;
     if (flags.timeout !== undefined && Number(flags.timeout) > 0) p.timeoutSec = Number(flags.timeout);
+    // Args for the same command: --login "login", --status "auth status".
+    if (typeof flags.login === 'string' && flags.login.trim()) p.login = splitCommand(flags.login);
+    if (typeof flags.status === 'string' && flags.status.trim())
+      p.status = { args: splitCommand(flags.status), ok: 'exit0' };
     writeJudgeConfig(home, (j) => (j.providers[name] = p), `Add judge provider: ${name}`);
     out(`added judge "${name}" (${p.command}${p.model ? `, model ${p.model}` : ''})`);
     if (!providerAvailable(p)) err(`warning: "${p.command}" is not on PATH here`);
@@ -480,26 +557,14 @@ export function cmdJudge(pos, flags) {
       process.exitCode = 1;
       return;
     }
-    const t0 = Date.now();
-    const reply = runJudge(
-      chosen,
-      'Reply with ONLY this JSON array and nothing else: [{"ok":true}]',
-      { home }
-    );
-    const secs = ((Date.now() - t0) / 1000).toFixed(1);
-    let ok = false;
-    try {
-      ok = JSON.parse((String(reply || '').match(/\[[\s\S]*\]/) || ['null'])[0])?.[0]?.ok === true;
-    } catch {}
+    const { ok, secs, error } = probeJudge(chosen, { home });
     if (ok) out(`${chosen}: ok (${secs}s)`);
     else {
-      err(
-        `${chosen}: no usable reply after ${secs}s${reply ? `: ${reply.slice(0, 200)}` : lastJudgeError ? `: ${lastJudgeError}` : ''}`
-      );
+      err(`${chosen}: no usable reply after ${secs}s${error ? `: ${error}` : ''}`);
       process.exitCode = 1;
     }
     return;
   }
 
-  throw new Error(`unknown judge subcommand "${sub}"; use list|add|use|remove|test`);
+  throw new Error(`unknown judge subcommand "${sub}"; use list|setup|add|use|remove|test`);
 }

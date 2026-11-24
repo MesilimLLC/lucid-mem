@@ -527,7 +527,7 @@ function pendingCandidateLines(home, proj, { pointer = false, limit = 8 } = {}) 
   if (!items.length) return [];
   return [
     '',
-    '## Pending memory candidates (unsaved — review, `amr add` / `amr update <id>` / `amr delete <id>` the real ones)',
+    '## Pending memory candidates (unsaved — the daily `amr dream` review settles them; `amr review --auto` shows that plan now)',
     items.join('\n'),
   ];
 }

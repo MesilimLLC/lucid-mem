@@ -102,7 +102,9 @@ export function vetDecision(d, item, shownIds) {
   if (d.decision === 'retire') {
     if (!isTidy(item)) return 'retire is only allowed for tidy proposals';
     if (!d.id || !shownIds.has(d.id)) return 'retire names an id not in the shown memory';
-    if (!new RegExp(`\\b${d.id}\\b`).test(item.text)) return 'retire names an id the proposal does not';
+    // d.id is judge output: escape it so it matches literally.
+    const id = String(d.id).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (!new RegExp(`\\b${id}\\b`).test(item.text)) return 'retire names an id the proposal does not';
     return null;
   }
   const text = d.text || (d.decision === 'accept' ? item.text : '');
@@ -369,9 +371,11 @@ function touchStamp(home) {
   } catch {}
 }
 
+// The stamp holds the ISO time of the last run; mtime can be coarser
+// than a second on some filesystems, so compare the stored date.
 function reviewedToday(home) {
   try {
-    return fs.statSync(stampPath(home)).mtime.toISOString().slice(0, 10) === today();
+    return fs.readFileSync(stampPath(home), 'utf8').slice(0, 10) === today();
   } catch {
     return false;
   }
@@ -385,7 +389,11 @@ function takeRunLock(home) {
   } catch {
     try {
       if (Date.now() - fs.statSync(abs).mtimeMs > RUN_LOCK_STALE_MS) {
-        fs.rmSync(abs, { force: true });
+        // Rename first: only one contender can move the stale file, so a
+        // second one fails here rather than racing the create below.
+        const grave = `${abs}.stale-${process.pid}`;
+        fs.renameSync(abs, grave);
+        fs.rmSync(grave, { force: true });
         fs.writeFileSync(abs, String(process.pid), { flag: 'wx' });
         return true;
       }
@@ -412,15 +420,19 @@ export function maybeStartBackgroundReview(home) {
     const cli = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'amr.mjs');
     const logFile = path.join(home, '.git', 'amr-review.log');
     const fd = fs.openSync(logFile, 'a');
-    fs.writeSync(fd, `\n== ${new Date().toISOString()} ${crypto.randomBytes(3).toString('hex')}\n`);
-    spawn(process.execPath, [cli, 'review', '--auto', '--apply', '--background'], {
-      cwd: os.tmpdir(),
-      detached: true,
-      stdio: ['ignore', fd, fd],
-      windowsHide: true,
-      env: { ...process.env, AMR_HOME: home },
-    }).unref();
-    fs.closeSync(fd);
+    try {
+      fs.writeSync(fd, `\n== ${new Date().toISOString()} ${crypto.randomBytes(3).toString('hex')}\n`);
+      spawn(process.execPath, [cli, 'review', '--auto', '--apply', '--background'], {
+        cwd: os.tmpdir(),
+        detached: true,
+        stdio: ['ignore', fd, fd],
+        windowsHide: true,
+        env: { ...process.env, AMR_HOME: home },
+      }).unref();
+    } finally {
+      // The child keeps its own handle; close ours even if spawn threw.
+      fs.closeSync(fd);
+    }
     return true;
   } catch {
     return false;

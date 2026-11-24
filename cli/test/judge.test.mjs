@@ -153,6 +153,21 @@ test('the muse preset passes the prompt by file and the model by flag', () => {
   assert.deepEqual(p.args.slice(0, 5), ['exec', '--prompt-file', '{promptFile}', '--model', '{model}']);
 });
 
+test('AMR_JUDGE_CMD is split into argv, never run through a shell', () => {
+  const home = tmpdir();
+  amr(home, ['ensure']);
+  const fake = fakeCli(tmpdir());
+  const marker = path.join(tmpdir(), 'marker.txt');
+  // A shell would run the redirect; argv passes it through as plain text.
+  const r = run(['judge', 'test', 'env'], {
+    amrHome: home,
+    env: { AMR_JUDGE_CMD: `${fake.cmd} & echo pwned > "${marker}"` },
+  });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /env: ok/);
+  assert.equal(fs.existsSync(marker), false);
+});
+
 test('quoteWinArg quotes only what cmd.exe needs quoted', () => {
   assert.equal(quoteWinArg('exec'), 'exec');
   assert.equal(quoteWinArg('C:\\Temp\\a b\\p.txt'), '"C:\\Temp\\a b\\p.txt"');

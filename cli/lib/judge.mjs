@@ -331,7 +331,7 @@ export function runJudge(name, prompt, { home, provider } = {}) {
       cwd: work,
       // AMR_NO_JUDGE stops recursion into another judge; AMR_HOOKS_OFF
       // no-ops amr's own hook subcommands inside the spawned session.
-      env: { ...process.env, ...(p?.env || {}), AMR_NO_JUDGE: '1', AMR_HOOKS_OFF: '1' },
+      env: { ...process.env, ...p?.env, AMR_NO_JUDGE: '1', AMR_HOOKS_OFF: '1' },
       maxBuffer: 16 * 1024 * 1024,
     };
     let r;
@@ -344,7 +344,14 @@ export function runJudge(name, prompt, { home, provider } = {}) {
       const viaArg = (p.args || []).some((a) => /\{prompt(File)?\}/.test(String(a)));
       r = spawnJudge(bin, args, viaArg ? opts : { ...opts, input: prompt });
     } else if (name === 'env') {
-      r = spawnSync(process.env.AMR_JUDGE_CMD, { ...opts, input: prompt, shell: true });
+      // No shell: the value is split into argv like a --cmd provider, so
+      // shell metacharacters in the variable are never interpreted.
+      const [cmd, ...cmdArgs] = splitCommand(process.env.AMR_JUDGE_CMD || '');
+      // `node` is this process's own runtime: skip a PATH lookup that can
+      // time out under load and turn a working judge into a silent fallback.
+      const bin = cmd === 'node' ? process.execPath : cmd ? findBin(cmd) : null;
+      if (!bin) return null;
+      r = spawnJudge(bin, cmdArgs, { ...opts, input: prompt });
     } else {
       const bin = findBin(b.bin);
       if (!bin) return null;

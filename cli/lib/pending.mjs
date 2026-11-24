@@ -203,7 +203,9 @@ export function queueConsolidations(home, scope, texts, now = today()) {
     const dropped = new Set(droppedTexts(home, now));
     let queued = 0;
     for (const t of texts) {
-      const text = String(t).replace(/\s+/g, ' ').trim();
+      // Same normalization the review log uses (oneLine), so a dropped
+      // text with an em dash still matches its log row.
+      const text = String(t).replace(/—/g, '-').replace(/\s+/g, ' ').trim();
       if (!text || items.some((i) => i.text === text) || dropped.has(text)) continue;
       const head = `tidy${scope ? ` scope=${scope}` : ''}`;
       items.push({

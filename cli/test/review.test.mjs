@@ -248,8 +248,9 @@ test('dream --if-stale starts a detached review that drains the queue', async ()
     env: { ...judge.env, AMR_REVIEW: '', AMR_REVIEW_JUDGE: 'env' },
   });
   assert.equal(r.status, 0, r.stderr);
-  // The review is detached; give it time to finish.
-  for (let i = 0; i < 100 && queueText(home).includes('tracing'); i++)
+  // The review is detached; give it time to finish. A 20s budget was too
+  // tight on the slower Windows CI runner (node startup + git commit).
+  for (let i = 0; i < 300 && queueText(home).includes('tracing'); i++)
     await new Promise((res) => setTimeout(res, 200));
   assert.ok(!queueText(home).includes('tracing'), queueText(home));
   assert.match(read(path.join(home, 'dreams', 'review-log.md')), /Background proposal about tracing/);

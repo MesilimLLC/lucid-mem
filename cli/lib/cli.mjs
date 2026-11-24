@@ -28,6 +28,8 @@ import { cmdCoverage } from './coverage.mjs';
 import { cmdDoctor, cmdInstall, cmdUninstall } from './install.mjs';
 import { cmdServe } from './serve.mjs';
 import { cmdRecall, cmdUnhelpful } from './recall.mjs';
+import { cmdReviewAuto } from './review.mjs';
+import { cmdJudge } from './judge.mjs';
 
 const USAGE = `amr: agent memory CLI (lucid-mem)
 
@@ -42,6 +44,7 @@ usage: amr <command> [args] [flags]
   supersede <id> ["text"]       retire an entry to archive/superseded.md, optionally with a replacement
   delete <id>                   remove an entry entirely (alias: rm); recover via "search --history"
   review [dir]                  list pending memory candidates (unsaved proposals) for this repo
+  review --auto [--apply] [--archive] [--limit N] [--judge name]   judge decides each queued proposal (accept/merge/retire/drop); plan only unless --apply. The session-end dream starts one guarded --apply run a day (AMR_REVIEW=off disables)
   used <id...>                  mark entries that helped (boosts them in context ranking)
   ids                           assign ids to entries that lack them
   search "term"                 grep all memory files (--history also greps past commits)
@@ -57,7 +60,12 @@ usage: amr <command> [args] [flags]
   dream --triage [--limit N] [--apply]   judge sorts session-state-looking entries into keep/rewrite/archive; plan first, --apply to commit it
   harvest [--days N] [--json] [--extract] [--max N] [--min C]   list transcripts; --extract streams normalized user messages
   discover [--days N] [--min N] [--json]   rank repos by transcript mentions; shows memory coverage + suggested links
-  coverage [--days N] [--json] [--no-log] [--judge claude|codex|env]  save-rate metric: durable transcript signals vs memory repo
+  coverage [--days N] [--json] [--no-log] [--judge [name]]  save-rate metric: durable transcript signals vs memory repo
+  judge [list]                  judge models: built-ins (claude, codex, env), configured providers, and which one each command uses
+  judge add <name> --preset muse|claude|codex [--model m]   add a provider from a preset (e.g. --preset muse --model muse-spark-1.3)
+  judge add <name> --cmd "<command and args>" [--model m] [--output stdout|file|claude-json|json:<path>]   any headless CLI; args may use {model} {prompt} {promptFile} {outFile}, else the prompt goes on stdin
+  judge use <name|auto> [--for review|reflect|coverage|triage]   pick the judge for every command, or one
+  judge remove <name>  |  judge test [name]   delete a provider  |  send a tiny prompt and check the reply
   reflect                       Stop hook: gated, saves learnings via a background judge (AMR_REFLECT=block prompts in-session)
   install [--host a,b|all]      wire hooks + rules + MCP into detected agent hosts
   uninstall [--host a,b|all]    remove amr hooks + rules + MCP entries
@@ -211,7 +219,10 @@ export function main(argv) {
         return cmdCoverage(flags);
       case 'reflect':
         return cmdReflect();
+      case 'judge':
+        return cmdJudge(pos, flags);
       case 'review':
+        if (flags.auto) return cmdReviewAuto(flags);
         return cmdReview({ ...flags, cwd: flags.cwd || pos[0] });
       case 'used':
         return cmdUsed(pos);

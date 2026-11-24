@@ -247,7 +247,7 @@ test('context --hook: pending candidates collapse to a pointer; review and plain
   );
   const payload = JSON.stringify({ session_id: 'sess-p', source: 'startup', cwd: tmpdir() });
   const hook = run(['context', '--hook'], { amrHome: home, cwd: tmpdir(), input: payload }).stdout;
-  assert.match(hook, /## Pending memory candidates\n- 2 unsaved candidate\(s\) — run `amr review`/);
+  assert.match(hook, /## Pending memory candidates\n- 2 unsaved candidate\(s\) — reviewed automatically once a day by `amr dream`; `amr review` lists them/);
   assert.ok(!hook.includes('cache TTL'), hook);
 
   const plain = run(['context'], { amrHome: home, cwd: tmpdir() }).stdout;

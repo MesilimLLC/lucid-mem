@@ -516,7 +516,7 @@ function pendingCandidateLines(home, proj, { pointer = false, limit = 8 } = {}) 
     return [
       '',
       '## Pending memory candidates',
-      `- ${parts.join(' and ')} — run \`amr review\` when there is a natural pause, not mid-task`,
+      `- ${parts.join(' and ')} — reviewed automatically once a day by \`amr dream\`; \`amr review\` lists them`,
     ];
   }
   const items = limit ? all.slice(0, limit) : all;

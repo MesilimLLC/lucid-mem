@@ -88,7 +88,8 @@ const localProviders = () => {
 };
 const judgeCfg = () => {
   const amrJson = path.join(home, 'amr.json');
-  const shared = fs.existsSync(amrJson) ? JSON.parse(read(amrJson)).judge || {} : {};
+  // Spreading undefined is a no-op, so a missing amr.json needs no fallback.
+  const shared = fs.existsSync(amrJson) ? JSON.parse(read(amrJson)).judge : undefined;
   return { ...shared, providers: localProviders() };
 };
 

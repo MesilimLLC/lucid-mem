@@ -40,6 +40,21 @@ test('install --host bogus errors and lists valid hosts', () => {
   assert.match(r.stdout + r.stderr, /bogus/);
 });
 
+test('install --help prints help and wires nothing', () => {
+  const fakeHome = tmpdir();
+  const r = run(['install', '--help'], { amrHome: tmpdir(), fakeHome });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /^usage: amr install/);
+  assert.match(r.stdout, /install \[--host/);
+  assert.deepEqual(fs.readdirSync(fakeHome), []);
+});
+
+test('--help on a command without its own usage line prints the full usage', () => {
+  const r = run(['bogus', '--help'], { amrHome: tmpdir() });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /^amr: agent memory CLI/);
+});
+
 test('uninstall removes only amr wiring and preserves user config', () => {
   const home = tmpdir();
   const fakeHome = tmpdir();

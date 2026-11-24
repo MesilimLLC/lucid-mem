@@ -202,8 +202,18 @@ export function resolveJudge(which, { purpose, home } = {}) {
   return null;
 }
 
+// One PATH lookup per command per process: `amr judge` resolves every
+// purpose and each lookup spawns `where`/`which`, which is slow on Windows.
+const binCache = new Map();
+
 export function findBin(name) {
   if (path.isAbsolute(name)) return fs.existsSync(name) ? name : null;
+  const key = `${name}\0${process.env.PATH || ''}`;
+  if (!binCache.has(key)) binCache.set(key, lookupBin(name));
+  return binCache.get(key);
+}
+
+function lookupBin(name) {
   const tool = process.platform === 'win32' ? 'where' : 'which';
   const r = spawnSync(tool, [name], { encoding: 'utf8', timeout: 5000 });
   if (r.status !== 0) return null;

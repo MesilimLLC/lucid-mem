@@ -92,7 +92,7 @@ flags:
 const BOOL_FLAGS = new Set([
   'project', 'full', 'json', 'fix', 'compact', 'inline', 'spin', 'hook', 'hermes',
   'extract', 'no-log', 'allow-secret', 'if-stale-off', 'triage', 'apply',
-  'durable', 'history', 'new',
+  'durable', 'history', 'new', 'help',
 ]);
 
 function parseFlags(argv) {
@@ -136,6 +136,13 @@ function spaceFormProject(rest, flags, pos) {
     );
 }
 
+// The USAGE lines for one command, or all of USAGE when none match.
+function printCommandHelp(cmd) {
+  const lines = USAGE.split('\n').filter((l) => l.startsWith(`  ${cmd} `) || l === `  ${cmd}`);
+  process.stdout.write(lines.length ? `usage: amr ${cmd} ...\n${lines.join('\n')}\n` : USAGE);
+  return 0;
+}
+
 // Subcommands invoked by host session hooks. AMR_HOOKS_OFF is set on
 // processes amr spawns itself (the coverage judge) so a judge session's
 // own hooks don't pay for context/sync/dream/coverage on the way in
@@ -146,6 +153,9 @@ const HOOK_CMDS = new Set(['context', 'sync', 'dream', 'coverage', 'reflect', 'r
 export function main(argv) {
   const [cmd, ...rest] = argv;
   const { flags, pos } = parseFlags(rest);
+  // `amr <command> --help` prints help and never runs the command:
+  // install, dream --fix and friends change files.
+  if (cmd && flags.help !== undefined) return printCommandHelp(cmd);
   if (cmd === 'add' || cmd === 'update') spaceFormProject(rest, flags, pos);
   if (process.env.AMR_HOOKS_OFF && HOOK_CMDS.has(cmd)) return 0;
   try {

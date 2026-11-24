@@ -24,7 +24,8 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { commit, ensureRepo, episodicHits, git, hasRemote, looksSecret, numFlag, today, withLock } from './core.mjs';
 import { cmdAdd, cmdUpdate } from './commands.mjs';
-import { cmdSupersede, findById } from './ids.mjs';
+import { cmdSupersede, entryId, findById } from './ids.mjs';
+import { allLiveEntries } from './consolidate.mjs';
 import { resolveJudge, runJudge } from './judge.mjs';
 import {
   PENDING_REFLECTIONS,
@@ -180,8 +181,28 @@ function applyDecision(home, d, item) {
 
 // Judge one batch of same-scope items. Returns [{item, decisions}] for
 // the items the judge answered; unanswered items stay queued.
-function judgeBatch(judge, home, scope, items) {
+// The scope's memory, plus every live entry a batch item names by id. A tidy
+// proposal can point at topic-file entries (pitfalls.md, ...), which
+// memoryForScope does not read; without them the judge's merge or retire
+// would be refused as unknown.
+function memoryForBatch(home, scope, items) {
   const memory = memoryForScope(home, scope);
+  const named = new Set();
+  for (const it of items) for (const m of it.text.matchAll(/\b[0-9a-f]{4,}\b/g)) named.add(m[0]);
+  if (!named.size) return memory;
+  const have = new Set(memory.map((e) => e.id).filter(Boolean));
+  for (const { line } of allLiveEntries(home)) {
+    if (!line.trim().startsWith('- ')) continue;
+    const id = entryId(line);
+    if (!id || have.has(id) || !named.has(id)) continue;
+    const text = line.trim().slice(2).replace(/\s*\[[^\]]*\]\s*$/, '');
+    memory.push({ id, text, line: `${id}: ${text}` });
+  }
+  return memory;
+}
+
+function judgeBatch(judge, home, scope, items) {
+  const memory = memoryForBatch(home, scope, items);
   const reply = runJudge(judge, PROMPT(memory, items), { home });
   if (reply === null) return { memory, results: null };
   const byN = new Map();
@@ -235,10 +256,19 @@ function reviewSource(home, judge, items, { apply, archive }) {
         decisions.sort((a, b) => ORDER[a.decision] - ORDER[b.decision]);
         let anyWrite = false;
         let refusedAll = true;
+        // A retire is safe only once its merge landed: otherwise the detail
+        // it would drop was never copied into the keeper.
+        let mergeFailed = false;
         for (const d of decisions) {
-          const why = vetDecision(d, item, shownIds);
           const label = `${d.decision}${d.id ? ` ${d.id}` : ''}`;
+          if (d.decision === 'retire' && mergeFailed) {
+            counts.refused++;
+            out(`  refused  ${label}: its merge was not applied`);
+            continue;
+          }
+          const why = vetDecision(d, item, shownIds);
           if (why) {
+            if (d.decision === 'merge') mergeFailed = true;
             counts.refused++;
             out(`  refused  ${label}: ${item.text.slice(0, 90)} — ${why}`);
             continue;
@@ -270,6 +300,7 @@ function reviewSource(home, judge, items, { apply, archive }) {
             logRows.push({ decision: 'drop', text: item.text, reason: `already in memory: ${r.note}` });
             out(`  drop: ${item.text.slice(0, 90)} — already in memory`);
           } else {
+            if (d.decision === 'merge') mergeFailed = true;
             counts.refused++;
             out(`  failed   ${label}: ${r.note}`);
           }
@@ -347,7 +378,9 @@ export function cmdReviewAuto(flags) {
     );
     withLock(home, () => commit(home, files, `Dream: review ${summary(totals)}`));
     if (hasRemote(home)) git(home, ['push'], { timeout: 10000 });
-    touchStamp(home);
+    // Stamp only a finished review. A failed or partial judge run keeps the
+    // same-day retry open for the next session-end dream.
+    if (!totals.unanswered) touchStamp(home);
   } finally {
     if (background) releaseRunLock(home);
   }

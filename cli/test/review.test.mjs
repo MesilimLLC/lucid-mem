@@ -190,6 +190,64 @@ test('items the judge does not answer stay queued', () => {
   assert.match(q, /cache warmers/);
 });
 
+test('a retire is skipped when its merge is refused, so the detail is not lost', () => {
+  const home = tmpdir();
+  run(['ensure'], { amrHome: home });
+  run(['add', 'Run the linter before pushing.'], { amrHome: home });
+  run(['add', 'Always lint before a push, CI rejects lint errors.', '--new'], { amrHome: home });
+  const keep = idOf(home, 'MEMORY.md', 'Run the linter');
+  const dup = idOf(home, 'MEMORY.md', 'Always lint');
+  writeQueue(home, [
+    `- [consolidate] 2026-11-23 tidy: merge ${dup} into ${keep} (near-duplicate): fold any unique detail into ${keep}, then \`amr delete ${dup}\``,
+  ]);
+  // The merge has no text, so vetting refuses it; the retire must not run.
+  const judge = stubJudge(tmpdir(), [
+    { n: 1, decision: 'merge', id: keep, reason: 'fold detail' },
+    { n: 1, decision: 'retire', id: dup, reason: 'duplicate' },
+  ]);
+  const r = review(home, judge, ['--apply']);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /refused  retire [0-9a-f]+: its merge was not applied/);
+  assert.match(read(path.join(home, 'MEMORY.md')), /Always lint/);
+});
+
+test('a tidy can retire a topic-file entry it names', () => {
+  const home = tmpdir();
+  run(['ensure'], { amrHome: home });
+  run(['add', 'Pin the lockfile version in CI.', '--file', 'pitfalls'], { amrHome: home });
+  run(['add', 'Pin lockfile versions in CI so builds repeat.', '--file', 'pitfalls', '--new'], { amrHome: home });
+  const keep = idOf(home, 'pitfalls.md', 'Pin the lockfile');
+  const dup = idOf(home, 'pitfalls.md', 'Pin lockfile versions');
+  writeQueue(home, [
+    `- [consolidate] 2026-11-23 tidy: merge ${dup} into ${keep} (near-duplicate): fold any unique detail into ${keep}, then \`amr delete ${dup}\``,
+  ]);
+  const judge = stubJudge(tmpdir(), [
+    { n: 1, decision: 'merge', id: keep, text: 'Pin the lockfile version in CI so builds repeat.', reason: 'fold' },
+    { n: 1, decision: 'retire', id: dup, reason: 'duplicate' },
+  ]);
+  const r = review(home, judge, ['--apply']);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /-1 /);
+  assert.ok(!read(path.join(home, 'pitfalls.md')).includes('Pin lockfile versions'));
+});
+
+test('a review the judge did not finish does not stamp the day as reviewed', () => {
+  const home = tmpdir();
+  run(['ensure'], { amrHome: home });
+  writeQueue(home, ['- [reflect] 2026-11-23 add fact global: Proposal the judge cannot answer.']);
+  const stamp = path.join(home, '.git', 'amr.lastreview');
+  // An empty reply: nothing parses, so the item stays queued.
+  const failing = stubJudge(tmpdir(), []);
+  const r1 = review(home, failing, ['--apply']);
+  assert.equal(r1.status, 0, r1.stderr);
+  assert.match(r1.stdout, /unanswered 1/);
+  assert.equal(fs.existsSync(stamp), false);
+  const working = stubJudge(tmpdir(), [{ n: 1, decision: 'drop', reason: 'no' }]);
+  const r2 = review(home, working, ['--apply']);
+  assert.equal(r2.status, 0, r2.stderr);
+  assert.equal(fs.existsSync(stamp), true);
+});
+
 test('a dropped tidy is not re-queued by the next dream', () => {
   const home = tmpdir();
   run(['ensure'], { amrHome: home });

@@ -22,6 +22,7 @@ import {
   mergeProposals,
 } from './consolidate.mjs';
 import { queueConsolidations } from './pending.mjs';
+import { maybeStartBackgroundReview } from './review.mjs';
 
 const out = (s = '') => process.stdout.write(s + '\n');
 const err = (s) => process.stderr.write(s + '\n');
@@ -487,6 +488,11 @@ export function cmdDream(flags) {
   const staleDays = numFlag(flags.days ?? '90', 90);
   const cfg = loadConfig(home);
   const budget = numFlag(flags.budget, cfg.contextBudget ?? 0);
+
+  // The session-end hook (--if-stale) also hands the pending queue to a
+  // detached judge review, once a day; it runs on its own stamp so a
+  // review that failed still retries the same day after a dream.
+  if (flags['if-stale'] !== undefined) maybeStartBackgroundReview(home);
 
   // recently dreamt; stay quiet (hook-safe)
   if (recentlyDreamt(home, flags)) return;

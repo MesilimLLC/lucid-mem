@@ -12,6 +12,7 @@ import {
   cmdPolicy,
   cmdReflect,
   cmdRemote,
+  cmdReview,
   cmdSearch,
   cmdSync,
   cmdUnlink,
@@ -27,19 +28,24 @@ import { cmdCoverage } from './coverage.mjs';
 import { cmdDoctor, cmdInstall, cmdUninstall } from './install.mjs';
 import { cmdServe } from './serve.mjs';
 import { cmdRecall, cmdUnhelpful } from './recall.mjs';
+import { cmdReviewAuto } from './review.mjs';
+import { cmdJudge } from './judge.mjs';
+import { cmdJudgeSetup } from './judge-setup.mjs';
 
 const USAGE = `amr: agent memory CLI (lucid-mem)
 
 usage: amr <command> [args] [flags]
 
   ensure                        create/verify the memory repo ($AMR_HOME, default ~/agent-memory)
-  context [dir] [--budget N]    ranked session digest (default 6000 chars; --full ignores): project-scoped inside a known repo; global + pooled projects outside; --hook (Claude SessionStart) suppresses unchanged compaction re-injections; --hermes (Hermes shell hooks) injects once per session via pre_llm_call, re-arms on post_compaction
+  context [dir] [--budget N]    ranked session digest (default 6000 chars; --full ignores): project-scoped inside a known repo; global + pooled projects outside; --hook (Claude SessionStart) sends only new entries on compaction/resume re-injections and points at "amr review" instead of listing candidates; --hermes (Hermes shell hooks) injects once per session via pre_llm_call, re-arms on post_compaction
   recall ["<error text>"]       surface memory possibly relevant to a tool failure (PostToolUseFailure hook reads the payload on stdin with --hook); acts only on real failures, only this project's entries, silent when nothing matches
   unhelpful <id...> ["<error>"] mute a recalled entry for that kind of error (learns from the last recall, or from the error text given)
   add "text"                    save a memory entry
   update <id|"match"> "text"   replace an entry in place; ids look like a3f9 (shown in entry meta)
   supersede <id> ["text"]       retire an entry to archive/superseded.md, optionally with a replacement
   delete <id>                   remove an entry entirely (alias: rm); recover via "search --history"
+  review [dir]                  list pending memory candidates (unsaved proposals) for this repo
+  review --auto [--apply] [--archive] [--limit N] [--judge name]   judge decides each queued proposal (accept/merge/retire/drop); plan only unless --apply. The session-end dream starts one guarded --apply run a day (AMR_REVIEW=off disables)
   used <id...>                  mark entries that helped (boosts them in context ranking)
   ids                           assign ids to entries that lack them
   search "term"                 grep all memory files (--history also greps past commits)
@@ -55,7 +61,13 @@ usage: amr <command> [args] [flags]
   dream --triage [--limit N] [--apply]   judge sorts session-state-looking entries into keep/rewrite/archive; plan first, --apply to commit it
   harvest [--days N] [--json] [--extract] [--max N] [--min C]   list transcripts; --extract streams normalized user messages
   discover [--days N] [--min N] [--json]   rank repos by transcript mentions; shows memory coverage + suggested links
-  coverage [--days N] [--json] [--no-log] [--judge claude|codex|env]  save-rate metric: durable transcript signals vs memory repo
+  coverage [--days N] [--json] [--no-log] [--judge [name]]  save-rate metric: durable transcript signals vs memory repo
+  judge [list]                  judge models: built-ins (claude, codex, env), configured providers, and which one each command uses
+  judge setup                   interactive: pick a judge, sign in to its CLI if needed (runs the CLI's own login), test it, then save it
+  judge add <name> --preset muse|claude|codex [--model m]   add a provider from a preset (e.g. --preset muse --model muse-spark-1.3)
+  judge add <name> --cmd "<command and args>" [--model m] [--output stdout|file|claude-json|json:<path>]   any headless CLI; args may use {model} {prompt} {promptFile} {outFile}, else the prompt goes on stdin; --login "<args>" and --status "<args>" tell setup how to sign in
+  judge use <name|auto> [--for review|reflect|coverage|triage]   pick the judge for every command, or one
+  judge remove <name>  |  judge test [name]   delete a provider  |  send a tiny prompt and check the reply
   reflect                       Stop hook: gated, saves learnings via a background judge (AMR_REFLECT=block prompts in-session)
   install [--host a,b|all]      wire hooks + rules + MCP into detected agent hosts
   uninstall [--host a,b|all]    remove amr hooks + rules + MCP entries
@@ -80,7 +92,7 @@ flags:
 const BOOL_FLAGS = new Set([
   'project', 'full', 'json', 'fix', 'compact', 'inline', 'spin', 'hook', 'hermes',
   'extract', 'no-log', 'allow-secret', 'if-stale-off', 'triage', 'apply',
-  'durable', 'history', 'new',
+  'durable', 'history', 'new', 'help',
 ]);
 
 function parseFlags(argv) {
@@ -124,6 +136,13 @@ function spaceFormProject(rest, flags, pos) {
     );
 }
 
+// The USAGE lines for one command, or all of USAGE when none match.
+function printCommandHelp(cmd) {
+  const lines = USAGE.split('\n').filter((l) => l.startsWith(`  ${cmd} `) || l === `  ${cmd}`);
+  process.stdout.write(lines.length ? `usage: amr ${cmd} ...\n${lines.join('\n')}\n` : USAGE);
+  return 0;
+}
+
 // Subcommands invoked by host session hooks. AMR_HOOKS_OFF is set on
 // processes amr spawns itself (the coverage judge) so a judge session's
 // own hooks don't pay for context/sync/dream/coverage on the way in
@@ -134,6 +153,9 @@ const HOOK_CMDS = new Set(['context', 'sync', 'dream', 'coverage', 'reflect', 'r
 export function main(argv) {
   const [cmd, ...rest] = argv;
   const { flags, pos } = parseFlags(rest);
+  // `amr <command> --help` prints help and never runs the command:
+  // install, dream --fix and friends change files.
+  if (cmd && flags.help !== undefined) return printCommandHelp(cmd);
   if (cmd === 'add' || cmd === 'update') spaceFormProject(rest, flags, pos);
   if (process.env.AMR_HOOKS_OFF && HOOK_CMDS.has(cmd)) return 0;
   try {
@@ -209,6 +231,12 @@ export function main(argv) {
         return cmdCoverage(flags);
       case 'reflect':
         return cmdReflect();
+      case 'judge':
+        if (pos[0] === 'setup') return cmdJudgeSetup();
+        return cmdJudge(pos, flags);
+      case 'review':
+        if (flags.auto) return cmdReviewAuto(flags);
+        return cmdReview({ ...flags, cwd: flags.cwd || pos[0] });
       case 'used':
         return cmdUsed(pos);
       case 'ids':

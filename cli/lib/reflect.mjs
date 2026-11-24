@@ -88,9 +88,15 @@ export function transcriptText(file) {
 // file, newest kept when over budget. Lines are "id: text" so the judge
 // can target an update; meta and expired state entries are dropped.
 export function existingMemory(home, cwd) {
-  const files = [path.join(home, 'MEMORY.md')];
   const proj = cwd ? projectFor(cwd) : null;
-  if (proj) files.push(path.join(home, 'projects', `${proj.slug}.md`));
+  return memoryForScope(home, proj?.slug ?? null);
+}
+
+// Same, addressed by project slug (null = global only) — for callers
+// with no cwd, like the detached queue review.
+export function memoryForScope(home, slug, maxChars = MEMORY_CHARS) {
+  const files = [path.join(home, 'MEMORY.md')];
+  if (slug) files.push(path.join(home, 'projects', `${slug}.md`));
   const entries = [];
   for (const f of files) {
     if (!fs.existsSync(f)) continue;
@@ -105,7 +111,7 @@ export function existingMemory(home, cwd) {
   const kept = [];
   let chars = 0;
   for (const e of entries.reverse()) {
-    if (chars + e.line.length > MEMORY_CHARS) break;
+    if (chars + e.line.length > maxChars) break;
     kept.unshift(e);
     chars += e.line.length + 1;
   }
@@ -185,7 +191,7 @@ export function cmdReflectRun(payloadFile) {
   } catch {
     return;
   }
-  const judge = resolveJudge(process.env.AMR_REFLECT_JUDGE || 'auto');
+  const judge = resolveJudge(process.env.AMR_REFLECT_JUDGE || 'auto', { purpose: 'reflect' });
   if (!judge) return log('no judge available; skipped');
   let convo;
   try {

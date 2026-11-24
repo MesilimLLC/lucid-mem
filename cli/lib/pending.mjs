@@ -1,8 +1,9 @@
 // Reflection review queue. The background judge never writes memory
-// directly: its proposals land in dreams/pending-reflections.md, which
-// `amr context` lists under "Pending memory candidates" for the next
-// session to accept (`amr add` / `amr update <id>`) or ignore. Proposals
-// drain when a matching entry is saved and age out after a fortnight.
+// directly: its proposals land in dreams/pending-reflections.md. A
+// second judge pass (`amr review --auto`, review.mjs, started daily by
+// `amr dream`) decides them against current memory; `amr review` lists
+// them for a person. Proposals also drain when a matching entry is saved
+// and age into the archive after a fortnight.
 // Kept apart from pending-saves.md, which `amr coverage` rewrites whole.
 
 import fs from 'node:fs';
@@ -14,6 +15,11 @@ export const PENDING_REFLECTIONS = path.join('dreams', 'pending-reflections.md')
 // a proposal the queue drops before any session reviewed it can still be
 // rescued with `amr add`. Trim reviewed lines by hand when done.
 export const REFLECTION_ARCHIVE = path.join('dreams', 'reflection-archive.md');
+// Items `amr review --auto` dropped, so the reflection judge does not
+// propose the same lesson again next session and churn the queue.
+export const REVIEW_LOG = path.join('dreams', 'review-log.md');
+const REVIEW_LOG_DAYS = 90;
+const REVIEW_LOG_MAX = 400;
 const MAX_ITEMS = 15;
 const MAX_AGE_DAYS = 14;
 const MAX_ARCHIVED = 200;
@@ -95,7 +101,14 @@ function readItems(abs) {
     .split(/\r?\n/)
     .map((l) => l.match(ITEM))
     .filter(Boolean)
-    .map(([line, date, head, text]) => ({ line, date, head, text }));
+    .map(([line, date, head, text]) => ({
+      line,
+      date,
+      head,
+      // `amr dream` id-tags every bullet, queue lines included; the tag is
+      // not part of the proposal.
+      text: text.replace(/\s*\[id: [0-9a-f]+\]\s*$/, ''),
+    }));
 }
 
 // Project scope rides on the head as scope=<slug>. Unscoped items are
@@ -154,10 +167,12 @@ export function queueReflections(home, proposals, now = today(), scope = null) {
     const all = readItems(abs);
     archiveItems(home, all.filter((i) => !fresh(i.date, now)));
     const items = all.filter((i) => fresh(i.date, now));
+    const dropped = droppedTexts(home, now);
     let queued = 0;
     for (const p of proposals) {
       const text = String(p.text).replace(/\s+/g, ' ').trim();
       if (!text || isNearDuplicate(text, items.map((i) => i.text))) continue;
+      if (isNearDuplicate(text, dropped)) continue;
       const base =
         p.op === 'update'
           ? `update ${p.id}`
@@ -183,10 +198,15 @@ export function queueConsolidations(home, scope, texts, now = today()) {
     const all = readItems(abs);
     archiveItems(home, all.filter((i) => !fresh(i.date, now)));
     const items = all.filter((i) => fresh(i.date, now));
+    // A tidy the review dropped (the judge kept the entries) would
+    // otherwise be re-queued by every daily dream.
+    const dropped = new Set(droppedTexts(home, now));
     let queued = 0;
     for (const t of texts) {
-      const text = String(t).replace(/\s+/g, ' ').trim();
-      if (!text || items.some((i) => i.text === text)) continue;
+      // Same normalization the review log uses (oneLine), so a dropped
+      // text with an em dash still matches its log row.
+      const text = String(t).replace(/—/g, '-').replace(/\s+/g, ' ').trim();
+      if (!text || items.some((i) => i.text === text) || dropped.has(text)) continue;
       const head = `tidy${scope ? ` scope=${scope}` : ''}`;
       items.push({
         line: `- [consolidate] ${now} ${head}: ${text}`,
@@ -226,4 +246,80 @@ export function pendingReflectionLines(home, now = today(), scope = null) {
     .filter((i) => fresh(i.date, now) && visibleIn(i.head, scope))
     .reverse()
     .map((i) => i.line);
+}
+
+// ---- `amr review --auto` support ------------------------------------------
+
+// Queue or archive items as {line, date, head, text, scope}. scope is the
+// project slug a scoped item belongs to, or null for a global item.
+export function readQueue(home, { archive = false } = {}) {
+  return readItems(path.join(home, archive ? REFLECTION_ARCHIVE : PENDING_REFLECTIONS)).map(
+    (i) => ({ ...i, scope: (i.head.match(/scope=([a-z0-9-]+)/) || [])[1] || null })
+  );
+}
+
+// Remove decided items (by exact line) from the queue or the archive,
+// under the lock, keeping anything queued since the snapshot was taken.
+export function removeQueueLines(home, lines, { archive = false } = {}) {
+  if (!lines.length) return;
+  const gone = new Set(lines);
+  const abs = path.join(home, archive ? REFLECTION_ARCHIVE : PENDING_REFLECTIONS);
+  withLock(home, () => {
+    if (!fs.existsSync(abs)) return;
+    if (!archive) {
+      writeItems(abs, readItems(abs).filter((i) => !gone.has(i.line)));
+      return;
+    }
+    const kept = fs
+      .readFileSync(abs, 'utf8')
+      .split(/\r?\n/)
+      .filter((l) => ITEM.test(l) && !gone.has(l));
+    if (!kept.length) fs.rmSync(abs, { force: true });
+    else fs.writeFileSync(abs, [...ARCHIVE_HEADER, ...kept].join('\n') + '\n');
+  });
+}
+
+const LOG_ROW = /^- (\d{4}-\d{2}-\d{2}) (accept|merge|retire|drop): (.*?)(?: — [^—]*)?$/;
+const oneLine = (s) => String(s || '').replace(/\s+/g, ' ').replace(/—/g, '-').trim();
+
+// Append review decisions as "- 2026-11-23 drop: text — reason", newest
+// REVIEW_LOG_MAX kept. Every decision is logged; only drops feed the
+// re-proposal filter in queueReflections.
+export function logReviewDecisions(home, rows, now = today()) {
+  if (!rows.length) return;
+  const abs = path.join(home, REVIEW_LOG);
+  withLock(home, () => {
+    const prev = fs.existsSync(abs)
+      ? fs.readFileSync(abs, 'utf8').split(/\r?\n/).filter((l) => LOG_ROW.test(l))
+      : [];
+    const add = rows.map(
+      (r) => `- ${now} ${r.decision}: ${oneLine(r.text)}${r.reason ? ` — ${oneLine(r.reason)}` : ''}`
+    );
+    const kept = [...prev, ...add].slice(-REVIEW_LOG_MAX);
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.writeFileSync(
+      abs,
+      [
+        '# Review log',
+        '',
+        `Decisions \`amr review --auto\` made on queued proposals. Dropped items are not proposed again for ${REVIEW_LOG_DAYS} days.`,
+        '',
+        ...kept,
+      ].join('\n') + '\n'
+    );
+  });
+}
+
+// Texts of items dropped within REVIEW_LOG_DAYS.
+export function droppedTexts(home, now = today()) {
+  const abs = path.join(home, REVIEW_LOG);
+  if (!fs.existsSync(abs)) return [];
+  return fs
+    .readFileSync(abs, 'utf8')
+    .split(/\r?\n/)
+    .map((l) => l.match(LOG_ROW))
+    .filter(
+      (m) => m && m[2] === 'drop' && (Date.parse(now) - Date.parse(m[1])) / 864e5 <= REVIEW_LOG_DAYS
+    )
+    .map((m) => m[3]);
 }

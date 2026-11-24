@@ -129,7 +129,7 @@ export function parseVerdicts(reply, batch) {
 }
 
 function plan(home, flags) {
-  const judge = resolveJudge(flags.judge || process.env.AMR_TRIAGE_JUDGE || 'auto');
+  const judge = resolveJudge(flags.judge || process.env.AMR_TRIAGE_JUDGE || 'auto', { purpose: 'triage' });
   if (!judge) {
     err('triage needs a judge (claude, codex, or AMR_JUDGE_CMD); none found');
     process.exitCode = 1;

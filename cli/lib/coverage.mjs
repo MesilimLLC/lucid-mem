@@ -211,7 +211,7 @@ export function cmdCoverage(flags) {
   // a spawned host session's own hooks can't recurse into judging.
   let judge = null;
   if (flags.judge !== undefined && !process.env.AMR_NO_JUDGE) {
-    const name = resolveJudge(flags.judge);
+    const name = resolveJudge(flags.judge, { purpose: 'coverage' });
     if (!name)
       out(
         `note: --judge ${flags.judge === true ? '' : flags.judge + ' '}unavailable — deterministic results`

@@ -21,6 +21,9 @@ export function run(args, { cwd, amrHome, fakeHome, env, input } = {}) {
   const e = {
     ...process.env,
     AMR_HOME: amrHome,
+    // `amr dream --if-stale` detaches a judge-backed queue review; never
+    // let a test start a real judge. Tests that exercise it override this.
+    AMR_REVIEW: 'off',
     // Redirect every home-ish env var so harvest/adapters can't touch
     // the real user profile during tests (APPDATA leaks otherwise).
     ...(fakeHome

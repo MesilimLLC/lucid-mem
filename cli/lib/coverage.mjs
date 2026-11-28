@@ -142,7 +142,7 @@ function judgePass(name, candidates, unflagged, corpus) {
     'For every index in BOTH sections decide:',
     '- durable: it states a durable preference, decision, correction, rule, fact, or root cause worth persisting across sessions. Recall cues ("remember that?"), task chatter, status updates, and transient context are NOT durable.',
     '- covered: the durable content is already represented in MEMORY (paraphrase counts).',
-    '- proposal: if durable and not covered, one concise memory entry suitable for `amr add`.',
+    '- proposal: if durable and not covered, one concise memory entry suitable for `lucid add`.',
     '',
     'Reply with ONLY JSON: {"flagged":[{"i":0,"durable":true,"covered":false,"proposal":"..."}],"unflagged":[{"i":0,"durable":false}]} — one entry per index in each section.',
   ].join('\n');
@@ -277,7 +277,7 @@ export function cmdCoverage(flags) {
         '# Pending memory candidates',
         '',
         'Durable-sounding user statements not found in memory.',
-        'Review: `amr add` the real ones; ignore the rest.',
+        'Review: `lucid add` the real ones; ignore the rest.',
         '',
         ...missed
           .slice(0, 15)

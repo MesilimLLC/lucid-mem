@@ -122,7 +122,7 @@ export function cmdIds() {
 // history is the recovery path (`amr search --history <term>`).
 export function cmdDelete(id) {
   const home = ensureRepo();
-  if (!ID_RE.test(id)) throw new Error('usage: amr delete <id>');
+  if (!ID_RE.test(id)) throw new Error('usage: lucid delete <id>');
   const rel = withLock(home, () => {
     const hit = findById(home, id);
     if (!hit) return null;
@@ -140,7 +140,7 @@ export function cmdDelete(id) {
   }
   drainReflections(home, '', [id]);
   if (hasRemote(home)) git(home, ['push'], { timeout: 10000 });
-  out(`deleted ${id} from ${rel} (history keeps it: amr search --history "term")`);
+  out(`deleted ${id} from ${rel} (history keeps it: lucid search --history "term")`);
 }
 
 // amr supersede <id> ["replacement"] — retire an entry. The old line moves
@@ -148,7 +148,7 @@ export function cmdDelete(id) {
 // replacement is saved in the same file with `supersedes: <id>`.
 export function cmdSupersede(id, text) {
   const home = ensureRepo();
-  if (!ID_RE.test(id)) throw new Error('usage: amr supersede <id> ["replacement text"]');
+  if (!ID_RE.test(id)) throw new Error('usage: lucid supersede <id> ["replacement text"]');
   const result = withLock(home, () => {
     const hit = findById(home, id);
     if (!hit) return null;

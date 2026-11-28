@@ -6,8 +6,8 @@
 #
 # Prefers a systemd user timer (Linux); falls back to a weekly cron
 # entry (macOS, minimal Linux). Both run:
-#   weekly  Sun 03:00  amr dream --fix --compact
-#   daily              amr dream --if-stale 1 --fix --compact
+#   weekly  Sun 03:00  lucid dream --fix --compact
+#   daily              lucid dream --if-stale 1 --fix --compact
 # POSIX cron has no idle trigger, so the daily stale-gated run takes
 # the place of the Windows 5-minute idle task: it still catches up
 # once a day instead of within minutes.

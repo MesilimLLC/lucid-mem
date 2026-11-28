@@ -186,7 +186,7 @@ async function handle(msg) {
           reply(id, {
             protocolVersion: '2024-11-05',
             capabilities: { tools: {} },
-            serverInfo: { name: 'amr', version: pkg.version },
+            serverInfo: { name: 'lucid', version: pkg.version },
           });
         return;
       case 'ping':

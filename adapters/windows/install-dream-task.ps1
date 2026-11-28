@@ -3,8 +3,8 @@
 #       powershell -File install-dream-task.ps1 -WithAgent (also weekly Devin session)
 #
 # Tasks installed:
-#   AgentMemoryDream-Mechanical  weekly Sun 03:00   amr dream --fix --compact
-#   AgentMemoryDream-Idle        on ~5min OS idle   amr dream --if-stale 1 --fix --compact
+#   AgentMemoryDream-Mechanical  weekly Sun 03:00   lucid dream --fix --compact
+#   AgentMemoryDream-Idle        on ~5min OS idle   lucid dream --if-stale 1 --fix --compact
 #   AgentMemoryDream-Agent       weekly Sun 04:00   devin -p DREAMER.md  (-WithAgent only)
 #
 # -WithAgent runs `devin -p` with the DREAMER.md playbook once a week.

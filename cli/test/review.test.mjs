@@ -132,7 +132,7 @@ test('review --auto --apply applies a tidy merge: fold into the keeper, retire t
   const keep = idOf(home, 'MEMORY.md', 'Run the linter');
   const dup = idOf(home, 'MEMORY.md', 'Always lint');
   writeQueue(home, [
-    `- [consolidate] 2026-11-23 tidy: merge ${dup} into ${keep} (near-duplicate): fold any unique detail into ${keep}, then \`amr delete ${dup}\``,
+    `- [consolidate] 2026-11-23 tidy: merge ${dup} into ${keep} (near-duplicate): fold any unique detail into ${keep}, then \`lucid delete ${dup}\``,
   ]);
   const judge = stubJudge(tmpdir(), [
     { n: 1, decision: 'retire', id: dup, reason: 'duplicate' },
@@ -198,7 +198,7 @@ test('a retire is skipped when its merge is refused, so the detail is not lost',
   const keep = idOf(home, 'MEMORY.md', 'Run the linter');
   const dup = idOf(home, 'MEMORY.md', 'Always lint');
   writeQueue(home, [
-    `- [consolidate] 2026-11-23 tidy: merge ${dup} into ${keep} (near-duplicate): fold any unique detail into ${keep}, then \`amr delete ${dup}\``,
+    `- [consolidate] 2026-11-23 tidy: merge ${dup} into ${keep} (near-duplicate): fold any unique detail into ${keep}, then \`lucid delete ${dup}\``,
   ]);
   // The merge has no text, so vetting refuses it; the retire must not run.
   const judge = stubJudge(tmpdir(), [
@@ -219,7 +219,7 @@ test('a tidy can retire a topic-file entry it names', () => {
   const keep = idOf(home, 'pitfalls.md', 'Pin the lockfile');
   const dup = idOf(home, 'pitfalls.md', 'Pin lockfile versions');
   writeQueue(home, [
-    `- [consolidate] 2026-11-23 tidy: merge ${dup} into ${keep} (near-duplicate): fold any unique detail into ${keep}, then \`amr delete ${dup}\``,
+    `- [consolidate] 2026-11-23 tidy: merge ${dup} into ${keep} (near-duplicate): fold any unique detail into ${keep}, then \`lucid delete ${dup}\``,
   ]);
   const judge = stubJudge(tmpdir(), [
     { n: 1, decision: 'merge', id: keep, text: 'Pin the lockfile version in CI so builds repeat.', reason: 'fold' },

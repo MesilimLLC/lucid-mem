@@ -126,7 +126,7 @@ test('add past 80% of budget queues consolidation proposals; delete drains them'
   assert.match(a.stderr, /consolidate: expired entry cc01/);
 
   const pend = () => read(path.join(home, 'dreams', 'pending-reflections.md')) || '';
-  assert.match(pend(), /\[consolidate\].*amr delete cc01/);
+  assert.match(pend(), /\[consolidate\].*lucid delete cc01/);
   // Proposals surface as pending candidates in context.
   assert.match(run(['context'], { amrHome: home }).stdout, /Pending memory candidates/);
   assert.match(run(['context'], { amrHome: home }).stdout, /cc01/);

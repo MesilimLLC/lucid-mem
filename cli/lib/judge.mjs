@@ -509,7 +509,7 @@ export function listJudges(home) {
   out('Configured:');
   const names = Object.keys(providers);
   if (!names.length)
-    out('  (none: add one with `amr judge add <name> --preset muse|claude|codex` or --cmd)');
+    out('  (none: add one with `lucid judge add <name> --preset muse|claude|codex` or --cmd)');
   for (const name of names) {
     const p = providers[name];
     out(
@@ -539,7 +539,7 @@ export function cmdJudge(pos, flags) {
   if (sub === 'add') {
     if (!name || !/^[a-z0-9][a-z0-9._-]*$/i.test(name))
       throw new Error(
-        'usage: amr judge add <name> (--preset muse|claude|codex | --cmd "<command and args>") [--model m]'
+        'usage: lucid judge add <name> (--preset muse|claude|codex | --cmd "<command and args>") [--model m]'
       );
     if (['claude', 'codex', 'env', 'auto'].includes(name))
       throw new Error(`"${name}" is a built-in name; pick another`);
@@ -552,7 +552,7 @@ export function cmdJudge(pos, flags) {
     } else if (typeof flags.cmd === 'string' && flags.cmd.trim()) {
       const [command, ...args] = splitCommand(flags.cmd);
       p = { command, args, output: 'stdout' };
-    } else throw new Error('amr judge add needs --preset <name> or --cmd "<command and args>"');
+    } else throw new Error('lucid judge add needs --preset <name> or --cmd "<command and args>"');
     if (typeof flags.model === 'string') p.model = flags.model;
     if (typeof flags.output === 'string') p.output = flags.output;
     if (flags.timeout !== undefined && Number(flags.timeout) > 0) p.timeoutSec = Number(flags.timeout);
@@ -563,18 +563,18 @@ export function cmdJudge(pos, flags) {
     writeJudgeConfig(home, (j) => (j.providers[name] = p), `Add judge provider: ${name}`);
     out(`added judge "${name}" (${p.command}${p.model ? `, model ${p.model}` : ''})`);
     if (!providerAvailable(p)) err(`warning: "${p.command}" is not on PATH here`);
-    out(`use it with \`amr judge use ${name}\`; check it with \`amr judge test ${name}\``);
+    out(`use it with \`lucid judge use ${name}\`; check it with \`lucid judge test ${name}\``);
     return;
   }
 
   if (sub === 'use') {
-    if (!name) throw new Error('usage: amr judge use <name|auto> [--for review|reflect|coverage|triage]');
+    if (!name) throw new Error('usage: lucid judge use <name|auto> [--for review|reflect|coverage|triage]');
     const purpose = typeof flags.for === 'string' ? flags.for : null;
     if (purpose && !PURPOSES.includes(purpose))
       throw new Error(`--for must be one of ${PURPOSES.join('|')}`);
     const { providers } = judgeConfig(home);
     if (name !== 'auto' && !Object.hasOwn(providers, name) && !Object.hasOwn(BACKENDS, name))
-      throw new Error(`unknown judge "${name}"; see \`amr judge\``);
+      throw new Error(`unknown judge "${name}"; see \`lucid judge\``);
     const key = purpose || 'use';
     writeJudgeConfig(
       home,

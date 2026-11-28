@@ -1234,8 +1234,11 @@ export function cmdDoctor() {
     if (missingPeers.length)
       out(`peers       : ${missingPeers.map((p) => p.name).join(', ')} configured but not cloned`);
   }
-  const onPath =
-    ['lucid', 'amr'].some((n) => sh('where', [n]).code === 0 || sh('which', [n]).code === 0);
-  out(`lucid on PATH : ${onPath ? 'yes' : `no — hooks still work via: node "${CLI_ENTRY}"`}`);
+  const onPath = (name) => sh('where', [name]).code === 0 || sh('which', [name]).code === 0;
+  const lucidOnPath = onPath('lucid');
+  const amrOnPath = onPath('amr');
+  out(`lucid on PATH : ${lucidOnPath ? 'yes' : 'no'}`);
+  out(`amr on PATH   : ${amrOnPath ? 'yes' : 'no'}`);
+  if (!lucidOnPath && !amrOnPath) out(`hooks still work via: node "${CLI_ENTRY}"`);
   for (const name of Object.keys(HOSTS)) out(`${name.padEnd(11)}: ${hostWired(name)}`);
 }

@@ -29,9 +29,9 @@ lucid-mem runs underneath the agent's normal workflow in four moves:
 - **Maintain continuously.** Session-end work and scheduled dreams dedupe, compact, expire transient state, and queue ambiguous learnings for review.
 - **Measure the result.** `lucid coverage` replays transcripts, finds durable signals the agent missed, and reports a save rate. The loop is observable, not aspirational.
 
-## The bounded-memory release
+## The self-maintaining memory release
 
-This release closes the loop on growth: entries expire by default, retired ones can leave zero trace, context ranks by relevance to the work at hand, and the store proposes its own merges before the digest budget runs out.
+Entries expire by default, retired ones can leave zero trace, and context ranks by relevance to the work at hand. This release closes the maintenance loop: eligible pending proposals can be reviewed in the background by configurable local judges, recall can respond to actual tool failures, and hooks carry a compact pointer to pending work.
 
 | Area | What shipped | Why it matters |
 |---|---|---|
@@ -41,6 +41,11 @@ This release closes the loop on growth: entries expire by default, retired ones 
 | **Stable identity** | Every entry gets a short id such as `a3f9`: `lucid update <id>`, `lucid supersede <id>`, `lucid delete <id>`, `lucid used <id>`, `lucid ids`. | Memory can be corrected, retired, removed, and credited instead of appended forever. |
 | **Ranked context** | `lucid context` ranks by kind, recency (60-day half-life), explicit use, and relevance to the current work (project, cwd, branch, recent files, transcript tail) inside a shared 6,000-character budget (`--budget`, `contextBudget`). `--full` opts out. | The digest stays small and relevant as the corpus grows. |
 | **Budget-pressure consolidation** | When a live file's entries cross ~80% of the digest budget, `lucid add` and `lucid dream` queue concrete merge/delete proposals (`[consolidate]` items) into the pending-candidates review queue instead of letting the next write silently rank out. | The store consolidates before it hits the wall, and nothing is rewritten without review. |
+| **Daily judge review** | `lucid dream --if-stale` starts a guarded background review at most once a day when proposals and a judge are available. Decisions are checked, applied through the normal write paths, and logged. | Proposals get a consumer without making a session hook wait for a judge. |
+| **Configurable judges** | `lucid judge setup` helps configure installed Claude, Codex, or Muse CLIs; `lucid judge add` also accepts other commands, and judges can be selected per command. | Use a judge that is already available on the machine. |
+| **Failure-gated recall** | The failure hook calls `lucid recall` only for real tool failures; matches respect full project identity and repeated suggestions are suppressed within a session. | Recall stays tied to the error and repo that need it. |
+| **Compact hook context** | Hooks point to pending candidates instead of injecting the full queue, and resumed sessions receive only new memory entries. | Useful review context stays available without bloating each session. |
+| **Clear CLI identity** | User-facing output identifies the CLI as `lucid`; `amr` remains a working alias for existing installs. | Existing commands keep working as the product name becomes consistent. |
 | **Backlog triage** | `lucid dream --triage` asks the judge to keep, rewrite, or archive legacy state-like entries. It writes a plan to `dreams/triage-plan.json`; `--apply` executes it. | Legacy untyped memory can become useful again — with a review step. |
 | **Better judge input** | The judge sees existing memory, failing tool output, and both the head and tail of long transcripts. Credential values in tool output are redacted first; anything still secret-shaped is dropped. | The model judges with the evidence that actually explains a lesson. |
 | **Wider coverage** | Gemini CLI and Zed join the host matrix. Gemini CLI shares `GEMINI.md` with Antigravity; Zed's JSONC settings are preserved. | One memory follows the engineer across more of their tools. |
@@ -161,7 +166,7 @@ One memory repo serves every project. Project files live at `projects/<name>-<ha
 
 ## Honest limits
 
-- **Pre-1.0.** The CLI is 0.9.x; commands and config keys can still move.
+- **Pre-1.0.** The CLI is 0.10.x; commands and config keys can still move.
 - **Saving is probabilistic.** The rule block and reflection improve adherence; they cannot guarantee it. That is why `lucid coverage` exists.
 - **Judges cost quota.** Reflection and triage are opt-in and use an installed agent CLI. Deterministic coverage works without them.
 - **Host coverage is uneven.** Hooks exist only where a host exposes them; some hosts are rules-only or MCP-only. Windsurf's Cascade transcripts are not harvested.
